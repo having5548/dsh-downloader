@@ -6,10 +6,10 @@
 
 [简体中文](README.md) | English
 
-![Version](https://img.shields.io/badge/version-0.4.0-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.0-4c7ef3?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-305%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-338%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -53,14 +53,14 @@ The two can be used together; they do not interfere. This plugin **never mutates
 From the GitHub release:
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.4.0.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.0.tgz
 ```
 
 Or build and install locally:
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.4.0.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.5.0.tgz
 ```
 
 > Profile name: the current Electron desktop app uses `desktop`; the older web CLI used `web`.
@@ -88,6 +88,42 @@ Then open **Settings → Download proxy**.
 
 > The legacy single `subscriptionUrl` field still works: it is consulted only when **no profile exists**. As soon as you import one, the selected profile wins.
 
+## ⚡ Multi-threaded downloads
+
+When the server supports `Range`, a large file is split across `threads` (4 by default) connections.
+
+**The point is not "cut it into N parts" but how you cut it.** Equal static splits are only fast when every connection is equally fast — one slow connection drags the whole transfer (`total ≈ slowest part × parts / concurrency`). So this follows gopeed (`internal/protocol/http/fetcher.go`):
+
+- start with an even `threads`-way split;
+- **whichever connection finishes first steals the front half of the chunk with the most bytes left** (never below 512 KiB — smaller slices are not worth a request);
+- a slow chunk therefore keeps getting cut down while fast connections stay busy, until everything is claimed.
+
+| Case | Behaviour |
+| --- | --- |
+| No `accept-ranges: bytes` | single connection |
+| File below 1 MiB | single connection (coordination costs more than it saves) |
+| `threads` = 1 | single connection |
+| Server **claims Range support but answers 200** | detected, then **falls back to one stream**, never a corrupt file |
+| `Content-Range` start mismatch, or the slices do not sum to the declared size | same fallback |
+
+Slices write at their absolute offset in one file (`FileHandle.write` with a position), and sha256 is computed by streaming the merged file afterwards — slices land out of order, so hashing as they arrive would produce the wrong digest.
+
+`via_threads` and `segments` in the result say which path was actually taken; the panel's "Download" card lets you change `threads`.
+
+## 📊 Live traffic in the sidebar
+
+A traffic badge sits in the sidebar foot (next to Settings) showing live up/down rates and cumulative bytes through this plugin's rule core:
+
+```
+↑ 1.2 MB/s   340 KB
+↓ 3.4 MB/s   1.8 GB
+```
+
+- The numbers come from the core's byte counters (`/traffic`) and cover **only this plugin's traffic**, not the whole NIC.
+- Collapsed to the 56px rail it switches to a minimal layout showing the download rate only.
+- Rates are deltas between samples, so the core caches a sample for 1.2 s — otherwise the panel (every 5 s) and the badge (every 1.5 s) would keep stealing each other's window and the reading would jump.
+- Polling drops to 5 s while the page is hidden.
+- The badge takes no space when the core is not running.
 ## 🔒 Proxy scope: only downloads this plugin starts
 
 The proxy serves **only** download requests this plugin initiates. That is not a convention — it is enforced by three hard constraints:
@@ -187,6 +223,7 @@ The upstream is resolved in this order; the first hit wins:
 | `downloadDir` | empty | empty = `$DSH_HOME/downloads` |
 | `maxDownloadMb` | `512` | per-file size limit |
 | `downloadTimeoutS` | `600` | per-download wall-clock budget |
+| `threads` | `4` | segmented connection count; `1` = single stream. Falls back to one connection when the server lacks `Range`, answers it dishonestly, or the file is under 1 MiB |
 | `stallTimeoutS` | `30` | abort after this long with no data |
 | `insecureTls` | `false` | skip TLS verification (corporate TLS interception only) |
 | `allowOutsideWorkspace` | `false` | allow `save_path` outside the workspace and download directory |
@@ -280,7 +317,7 @@ The core (rule engine, CN data, loopback mixed proxy, node transports, subscript
 
 ```bash
 npm install
-node test/smoke.mjs      # 305 checks: rules / subscriptions / profile import / routing / HTTP client / end-to-end / session guard / token gate
+node test/smoke.mjs      # 338 checks: rules / subscriptions / profile import / routing / HTTP client / end-to-end / session guard / token gate
 node --check lib/client.js
 npm pack
 ```

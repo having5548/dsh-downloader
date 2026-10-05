@@ -9,6 +9,45 @@
 
 ## [未发布]
 
+## [0.5.0] - 2026-10-05
+
+### 新增
+
+- **多线程（分片）下载**，参考 gopeed 的 `internal/protocol/http/fetcher.go`。
+  新增 `lib/download/segmented.js`：
+  - `supportsRanges()` / `parseContentRange()`：从 `accept-ranges` 与 `Content-Range: bytes a-b/total` 判定能否分片；
+  - `planChunks()`：按 `threads` 均分起始分片；
+  - `stealSlice()`：**工作窃取** —— 从「剩余字节最多的分片」前端切走一半，下限 `STEAL_MIN_BYTES = 512 KiB`，
+    低于下限就整块交出。这是 gopeed 相对固定等分的关键差别：固定等分只在各连接速度相当时才快，
+    一条慢连接会把整体拖到「最慢分片 × 份数 ÷ 并发」。
+  - `downloadSegmented()`：N 个 worker 并发拉取，各自用 `FileHandle.write(buffer, 0, len, offset)` **定位写**同一个文件；
+    共享停滞看门狗与取消信号；结束后**按顺序流式算 sha256**（分片乱序落盘，边下边算会得到错误的哈希）。
+- 接入 `attemptDownload()`：探测响应的头部满足条件（`threads > 1`、声明大小 ≥ 1 MiB、`accept-ranges: bytes`）时走分片，
+  否则原样单连接。**任何分片环节出问题都回退单连接重下**：非 206、缺 `Content-Range`、起点不符、
+  合计字节数与声明大小不符 —— 都以 `RangeUnusableError` 收场，绝不拼出坏文件。
+  服务器诚实度靠 `If-Range`（etag / last-modified）钉住。
+- 配置项 **`threads`**（默认 4，1–32），`dsh_download` 也接受单次调用覆盖；返回值新增 `via_threads` 与 `segments`，
+  渲染里会写明「N 个分片并发」还是「单连接（服务端不支持 Range，或已回退）」。
+- **侧边栏实时流量徽标**（client slot `sidebar.footer.action`）：不开设置页也能看到经过内核的上下行速率与累计流量。
+  展开态两行 `↑ 速率 累计` / `↓ 速率 累计`，56px 收起态切成只显示下行速率的极简排版，两者都带完整 tooltip；
+  页面隐藏时降到 5 秒一次；内核没跑时不占地方。
+
+### 变更
+
+- `#trafficSnapshot()` 增加 **1.2 秒采样缓存**。速率是两次采样的差值，而面板 5 秒一轮询、徽标 1.5 秒一轮询，
+  不缓存的话两边会互相偷走对方的采样窗口，读数乱跳。返回值新增 `active`（内核是否在跑）。
+
+### 修复
+
+- **`fs.promises.FileHandle.write` 不接受回调**。分片写入最初照 `fs.write` 的写法传了回调，
+  该参数被静默忽略、Promise 永不 settle，整个下载挂死（实测：测试套件卡在分片那一步）。
+  改为 await Promise 形式并校验 `bytesWritten`。
+
+> 测试 305 → 338 项：`supportsRanges` / `parseContentRange` / `planChunks` / `stealSlice` / `remainingBytes` 的边界，
+> 以及端到端的分片下载（3 MiB、sha256 逐字节比对、4 与 8 分片、`threads=1` 走单连接、
+> **声称支持 Range 却返回 200 的服务器必须回退且结果仍然正确**、经插件规则内核的分片下载）。
+> 测试夹具服务器新增 `/big.bin`（诚实 Range）与 `/liar.bin`（假 Range）两个端点。
+
 ## [0.4.0] - 2026-10-05
 
 用户报「`proxyUrl` 填了才有用、`subscriptionUrl` 填了没用而且不能选节点」之后查出来的三件事。他的订阅是

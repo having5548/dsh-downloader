@@ -59,7 +59,22 @@ function section(title) {
 // ---------------------------------------------------------------------------
 const PAYLOAD = randomBytes(512 * 1024);
 const PAYLOAD_SHA = createHash("sha256").update(PAYLOAD).digest("hex");
+// Above SEGMENT_MIN_TOTAL (1 MiB) so the segmented path actually engages.
+const BIG_PAYLOAD = randomBytes(3 * 1024 * 1024 + 12345);
+const BIG_SHA = createHash("sha256").update(BIG_PAYLOAD).digest("hex");
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "dshdl-smoke-"));
+
+/** 解析测试夹具用的 `Range: bytes=start-end`。 */
+function fixtureSlice(req, length) {
+	const raw = req.headers.range;
+	if (typeof raw !== "string") return null;
+	const match = /^bytes=(\d+)-(\d*)$/.exec(raw.trim());
+	if (match === null) return { invalid: true };
+	const start = Number(match[1]);
+	const end = match[2].length > 0 ? Number(match[2]) : length - 1;
+	if (start >= length || end >= length || start > end) return { invalid: true };
+	return { start, end };
+}
 
 const server = http.createServer((req, res) => {
 	const url = new URL(req.url ?? "/", "http://localhost");
@@ -67,6 +82,42 @@ const server = http.createServer((req, res) => {
 		case "/payload.bin":
 			res.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(PAYLOAD.length) });
 			res.end(PAYLOAD);
+			return;
+		case "/big.bin": {
+			// Honest range server: advertises and honours Accept-Ranges.
+			const slice = fixtureSlice(req, BIG_PAYLOAD.length);
+			if (slice !== null && slice.invalid === true) {
+				res.writeHead(416, { "content-range": `bytes */${BIG_PAYLOAD.length}` });
+				res.end();
+				return;
+			}
+			if (slice === null) {
+				res.writeHead(200, {
+					"content-type": "application/octet-stream",
+					"content-length": String(BIG_PAYLOAD.length),
+					"accept-ranges": "bytes"
+				});
+				res.end(BIG_PAYLOAD);
+				return;
+			}
+			res.writeHead(206, {
+				"content-type": "application/octet-stream",
+				"content-length": String(slice.end - slice.start + 1),
+				"content-range": `bytes ${slice.start}-${slice.end}/${BIG_PAYLOAD.length}`,
+				"accept-ranges": "bytes"
+			});
+			res.end(BIG_PAYLOAD.subarray(slice.start, slice.end + 1));
+			return;
+		}
+		case "/liar.bin":
+			// Claims range support but always answers 200 with the whole body: the
+			// segmented attempt must notice and fall back instead of corrupting.
+			res.writeHead(200, {
+				"content-type": "application/octet-stream",
+				"content-length": String(BIG_PAYLOAD.length),
+				"accept-ranges": "bytes"
+			});
+			res.end(BIG_PAYLOAD);
 			return;
 		case "/named":
 			res.writeHead(200, { "content-disposition": 'attachment; filename="report final.zip"' });
@@ -597,6 +648,70 @@ try {
 	unsupportedSubThrew = true;
 }
 check("an unrecognizable body still throws", unsupportedSubThrew);
+
+// ---------------------------------------------------------------------------
+section("多线程（分片）下载");
+const segmented = await import("../lib/download/segmented.js");
+
+check("a 206 counts as range-capable", segmented.supportsRanges(206, {}) === true);
+check("Accept-Ranges: bytes counts as range-capable", segmented.supportsRanges(200, { "accept-ranges": "bytes" }) === true);
+check("a plain 200 without the header does not", segmented.supportsRanges(200, {}) === false);
+check("Accept-Ranges: none does not", segmented.supportsRanges(200, { "accept-ranges": "none" }) === false);
+
+const cr = segmented.parseContentRange("bytes 1048576-2097151/3145728");
+equal("Content-Range start", cr.start, 1048576);
+equal("Content-Range end", cr.end, 2097151);
+equal("Content-Range total", cr.total, 3145728);
+equal("Content-Range tolerates an unknown total", segmented.parseContentRange("bytes 0-9/*").total, null);
+check("a malformed Content-Range is rejected", segmented.parseContentRange("bytes whatever") === null);
+
+const planned = segmented.planChunks(4 * 1024 * 1024, 4);
+equal("planChunks makes one chunk per thread", planned.length, 4);
+equal("the first chunk starts at zero", planned[0].begin, 0);
+equal("the last chunk ends at the last byte", planned[planned.length - 1].end, 4 * 1024 * 1024 - 1);
+check("the chunks tile the file exactly", planned.reduce((sum, c) => sum + (c.end - c.begin + 1), 0) === 4 * 1024 * 1024);
+equal("planChunks never exceeds the file size", segmented.planChunks(600 * 1024, 8).length, 1);
+equal("remainingBytes sums the unclaimed parts", segmented.remainingBytes(planned), 4 * 1024 * 1024);
+
+// 工作窃取：永远从剩余最多的 chunk 尾部切一半，小于两倍下限就整块交出去。
+const stealChunks = [{ begin: 0, end: 999 }, { begin: 1000, end: 3 * 1024 * 1024 }];
+const firstSteal = segmented.stealSlice(stealChunks);
+equal("steal takes the front of the chunk with the most left", firstSteal.begin, 1000);
+check("steal takes about half of it", firstSteal.end - firstSteal.begin + 1 >= segmented.STEAL_MIN_BYTES, JSON.stringify(firstSteal));
+check("the victim chunk shrinks", stealChunks[1].end - stealChunks[1].begin + 1 < 3 * 1024 * 1024);
+check("the small chunk is left alone", stealChunks[0].begin === 0 && stealChunks[0].end === 999);
+const tinyChunks = [{ begin: 0, end: 1024 }];
+const tinySteal = segmented.stealSlice(tinyChunks);
+equal("a sub-minimum chunk is handed over whole", tinySteal.end, 1024);
+check("the chunk is empty afterwards", segmented.stealSlice(tinyChunks) === null);
+check("no work left returns null", segmented.stealSlice([]) === null);
+
+const bigTarget = path.join(tmpRoot, "threaded", "big.bin");
+const threaded = await attemptDownload({ url: `${ORIGIN}/big.bin`, savePath: bigTarget, threads: 4, maxBytes: 64 * 1024 * 1024 });
+equal("threaded sha256 matches", threaded.sha256, BIG_SHA);
+equal("threaded reports its segment count", threaded.segments, 4);
+check("threaded took the multi-connection path", threaded.viaThreads === true);
+equal("threaded byte count", threaded.bytes, BIG_PAYLOAD.length);
+
+const threadedAgain = await attemptDownload({ url: `${ORIGIN}/big.bin`, savePath: bigTarget, threads: 8, overwrite: true, maxBytes: 64 * 1024 * 1024 });
+equal("a different thread count still merges correctly", threadedAgain.sha256, BIG_SHA);
+
+const singleTarget = path.join(tmpRoot, "threaded", "single.bin");
+const single = await attemptDownload({ url: `${ORIGIN}/big.bin`, savePath: singleTarget, threads: 1, maxBytes: 64 * 1024 * 1024 });
+equal("threads=1 stays on one connection", single.viaThreads, false);
+equal("threads=1 still gets the right bytes", single.sha256, BIG_SHA);
+
+// 服务端嘴上支持 Range、实际回整个 200：必须回退，不能拼出坏文件。
+const liarTarget = path.join(tmpRoot, "threaded", "liar.bin");
+const liar = await attemptDownload({ url: `${ORIGIN}/liar.bin`, savePath: liarTarget, threads: 4, maxBytes: 64 * 1024 * 1024 });
+check("a range-lying server falls back to one stream", liar.viaThreads === false);
+equal("the fallback result is still byte-correct", liar.sha256, BIG_SHA);
+
+// 同样的分片逻辑必须能穿过插件自己的代理内核。
+const threadedProxyTarget = path.join(tmpRoot, "threaded", "via-core.bin");
+const threadedProxy = await attemptDownload({ url: `${ORIGIN}/big.bin`, savePath: threadedProxyTarget, proxy: CORE, threads: 4, maxBytes: 64 * 1024 * 1024 });
+equal("segmented download through the rule core", threadedProxy.sha256, BIG_SHA);
+check("and it really was segmented", threadedProxy.viaThreads === true);
 
 // ---------------------------------------------------------------------------
 section("FlClash 式配置导入");

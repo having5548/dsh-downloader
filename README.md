@@ -6,10 +6,10 @@
 
 简体中文 | [English](README.en.md)
 
-![Version](https://img.shields.io/badge/version-0.4.0-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.0-4c7ef3?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-305%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-338%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -21,7 +21,7 @@
 | | | |
 |---|---|---|
 | 🌏 **境外走代理、境内直连**<br>`dsh_download` 一次调用内完成判定与下载，不用模型自己挑路线 | 📦 **代理出口自包含**<br>一条订阅即可用，**不依赖本机 Clash**；YAML 与分享链接两种订阅格式都吃，ss / trojan / vless / vmess / hysteria2（含 salamander 混淆）/ socks5 / http | 🛡️ **会话保活**<br>内置 22 家国内 AI 平台域名强制直连，优先级高于一切规则；另有 `dsh_session_guard` 守住 `$DSH_HOME/.env` |
-| 🧮 **离线分流判定**<br>内置 11 万条国内域名后缀 + 8.7K 条国内 IP 段，**判定不发任何网络请求**，不怕被墙 | 🔁 **失败自动回退**<br>直连失败（超时 / DNS / 连接重置）自动改用代理重试一次，结果里如实标 `fallback_used` | 🔐 **完整性可验证**<br>边下边算 sha256，返回保存路径、字节数、实时速度与所用路由 |
+| ⚡ **大文件多线程**<br>服务端支持 `Range` 时自动分片并发；先完成的连接去偷剩余最多的分片，慢服务器拖不住整体 | 📊 **侧边栏实时流量**<br>不开设置页也能看到经过内核的上下行速率与累计流量 | 🧮 **离线分流判定**<br>内置 11 万条国内域名后缀 + 8.7K 条国内 IP 段，**判定不发任何网络请求**，不怕被墙 | 🔁 **失败自动回退**<br>直连失败（超时 / DNS / 连接重置）自动改用代理重试一次，结果里如实标 `fallback_used` | 🔐 **完整性可验证**<br>边下边算 sha256，返回保存路径、字节数、实时速度与所用路由 |
 | 🧯 **失败不留残骸**<br>先写 `.part` 再原子重命名；**任何失败路径都删掉半截文件**，重跑永远安全 | ⏱️ **大文件不被打断**<br>刻意不声明宿主工具超时，只受自己可配的 `downloadTimeoutS` 与停滞检测约束 | 🖥️ **设置页管理面板**<br>状态 / 配置导入与管理 / 节点列表 / 逐节点测速 / 选组 / 实时流量 / 全部配置项 | 🗂️ **节点配置对齐 FlClash**<br>多份配置（订阅 URL / clash:// 深链 / 本地文件），各自的名字、上次更新时间与自动更新间隔 | 🔒 **只服务 DSH 自己发起的下载**<br>内核只绑回环 + 每进程随机令牌，其它程序连不上也借不走；系统代理与环境变量从未被改动 |
 
 ## ⚠️ 先读这一段：它能覆盖什么
@@ -53,14 +53,14 @@ NO_PROXY=localhost,127.0.0.1,::1,deepseek.com,.deepseek.com
 从 GitHub Release 安装：
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.4.0.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.0.tgz
 ```
 
 本地打包安装：
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.4.0.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.5.0.tgz
 ```
 
 > profile 名：新版桌面端是 `desktop`，旧版 Web 端是 `web`。
@@ -87,6 +87,44 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.4.0.tgz
 6. 结果里看 `route`：`proxy` = 走了节点，`direct` = 境内直连，`fallback_used: true` = 直连失败后回退到代理。
 
 > 旧版的单条 `subscriptionUrl` 配置依然可用：只有在**没有任何配置**时才会走它；一旦导入过配置，就以选中的那份为准。
+
+## ⚡ 多线程下载
+
+服务端支持 `Range` 时，大文件会自动分成 `threads`（默认 4）个连接并发下载。
+
+**关键不是"切成 N 份"，而是怎么切。** 固定等分只在各家网速相当时才快 —— 一条慢连接会拖住整体（`总时间 = 最慢那份的时间 × 份数` 除以并发）。所以这里照搬 gopeed 的做法（`internal/protocol/http/fetcher.go`）：
+
+- 起始按 `threads` 均分；
+- **谁先下完，谁就去偷「剩余字节最多的那个分片」的前半段**（下限 512 KiB，太碎就不值得单开请求）；
+- 于是慢分片会被不断切走，快的连接一直满载，直到全部抢完。
+
+| 情况 | 行为 |
+| --- | --- |
+| 服务端没有 `accept-ranges: bytes` | 单连接 |
+| 文件 < 1 MiB | 单连接（协调开销大于收益） |
+| `threads` = 1 | 单连接 |
+| 服务端**嘴上支持 Range 却返回 200** | 检测到后**回退单连接重下**，绝不拼出坏文件 |
+| `Content-Range` 起点不符 / 合计字节数不符 | 同上，回退重下 |
+
+分片各写同一文件的对应偏移（`FileHandle.write` 定位写），完成后按顺序流式算 sha256 —— 因为分片是乱序落盘的，边下边算会得到错误的哈希。
+
+返回值里的 `via_threads` 与 `segments` 说明实际走了哪条路；面板的「下载」卡片可以调 `threads`。
+
+## 📊 侧边栏实时流量
+
+侧边栏页脚（设置图标旁）有一个流量徽标，实时显示经过本插件内核的上下行速率与累计流量：
+
+```
+↑ 1.2 MB/s   340 KB
+↓ 3.4 MB/s   1.8 GB
+```
+
+- 数据来自内核的字节计数器（`/traffic`），**只统计经过本插件的流量**，不是全机网卡流量。
+- 侧边栏收起成 56px 窄条时自动切成极简排版，只显示下行速率。
+- 速率是两次采样之间的差值，所以内核侧加了 1.2 秒的采样缓存 —— 否则面板（5 秒一次）与徽标（1.5 秒一次）会互相偷走对方的采样窗口，读数乱跳。
+- 页面切到后台时降到 5 秒一次。
+- 内核没在跑时徽标不占地方。
+
 
 ## 🔒 代理作用域：只服务 DSH 自己发起的下载
 
@@ -191,6 +229,7 @@ dsh_run_proxied({ command: "git clone https://github.com/x/y.git" })
 | `maxDownloadMb` | `512` | 单文件大小上限 |
 | `downloadTimeoutS` | `600` | 单次下载总超时 |
 | `stallTimeoutS` | `30` | 无数据停滞多久判定卡死 |
+| `threads` | `4` | 多线程下载的分片连接数；`1` = 单连接。服务端不支持 `Range`、响应不可信、或文件 < 1 MiB 时自动回退单连接 |
 | `insecureTls` | `false` | 跳过 TLS 校验（企业 TLS 解密环境才开） |
 | `allowOutsideWorkspace` | `false` | 允许 `save_path` 写到工作区与下载目录之外 |
 | `maxRedirects` | `10` | 重定向上限 |
@@ -284,7 +323,7 @@ dsh_run_proxied({ command: "git clone https://github.com/x/y.git" })
 
 ```bash
 npm install
-node test/smoke.mjs      # 305 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
+node test/smoke.mjs      # 338 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
 node --check lib/client.js
 npm pack
 ```
