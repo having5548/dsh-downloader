@@ -181,7 +181,7 @@ NO_PROXY=localhost,127.0.0.1,::1,deepseek.com,.deepseek.com,z.ai,.z.ai,bigmodel.
 H:\mycode\dsh-downloader\
 ├─ package.json
 ├─ cordis.patch.yml
-├─ README.md  README.zh.md
+├─ README.md  README.en.md        (中文为主，英文在 .en)
 ├─ LICENSE                       (MIT)
 ├─ DESIGN.md                     (本文档)
 ├─ lib\
@@ -209,7 +209,7 @@ H:\mycode\dsh-downloader\
     "./client":  { "default": "./lib/client.js" },
     "./package.json": "./package.json"
   },
-  "files": ["lib", "native", "cordis.patch.yml", "README.md", "README.zh.md", "LICENSE"],
+  "files": ["lib", "cordis.patch.yml", "README.md", "README.en.md", "CHANGELOG.md", "LICENSE"],
   "engines": { "node": ">=20" },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
