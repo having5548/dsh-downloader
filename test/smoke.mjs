@@ -512,6 +512,93 @@ const emptyProfiles = asText(__internals.renderProfiles({ action: "list", profil
 check("an empty profile list renders a hint", emptyProfiles.includes("还没有导入任何配置"), emptyProfiles);
 
 // ---------------------------------------------------------------------------
+section("分享链接订阅（hysteria2 / ss / trojan / vmess / vless）");
+const links = await import("../lib/core/share-links.js");
+
+const hy2 = links.parseShareLink(
+	"hysteria2://6a4630d9-9752-4531-95eb-e7385b0e9f1a@example.com:32738?sni=example.com&insecure=0&obfs=salamander&obfs-password=secret16chars%3D%3D#%E6%97%A5%E6%9C%AC01"
+);
+equal("hysteria2 name is decoded", hy2.name, "日本01");
+equal("hysteria2 type", hy2.type, "hysteria2");
+equal("hysteria2 password", hy2.password, "6a4630d9-9752-4531-95eb-e7385b0e9f1a");
+equal("hysteria2 sni", hy2.sni, "example.com");
+equal("hysteria2 port", hy2.port, 32738);
+equal("hysteria2 obfs", hy2.obfs, "salamander");
+equal("hysteria2 obfs-password is url-decoded", hy2["obfs-password"], "secret16chars==");
+check("hysteria2 insecure=0 keeps verification on", hy2["skip-cert-verify"] === undefined);
+check("hy2:// is accepted too", links.parseShareLink("hy2://pw@a.com:443#x").type === "hysteria2");
+check("hysteria2 insecure=1 turns verification off", links.parseShareLink("hysteria2://pw@a.com:443?insecure=1#x")["skip-cert-verify"] === true);
+
+const ssBase64 = links.parseShareLink(`ss://${Buffer.from("aes-128-gcm:pass123").toString("base64")}@1.2.3.4:8388#SS%E8%8A%82%E7%82%B9`);
+equal("ss userinfo-base64 cipher", ssBase64.cipher, "aes-128-gcm");
+equal("ss userinfo-base64 password", ssBase64.password, "pass123");
+equal("ss name is decoded", ssBase64.name, "SS节点");
+const ssWhole = links.parseShareLink(`ss://${Buffer.from("chacha20-ietf-poly1305:pw@5.6.7.8:443").toString("base64")}#whole`);
+equal("ss whole-authority form", `${ssWhole.server}:${ssWhole.port}`, "5.6.7.8:443");
+equal("ss whole-authority cipher", ssWhole.cipher, "chacha20-ietf-poly1305");
+const ssPlugin = links.parseShareLink("ss://YWVzOnB3@1.2.3.4:1?plugin=obfs-local#x");
+check("ss with a plugin is flagged unsupported", ssPlugin !== null && typeof ssPlugin.__unsupported === "string", JSON.stringify(ssPlugin));
+const ssPluginList = links.parseShareLinkList("ss://YWVzOnB3@1.2.3.4:1?plugin=obfs-local#x\ntrojan://p@h.example:443#keep");
+check("the list parser drops an ss with a plugin and keeps the rest", ssPluginList.proxies.length === 1 && ssPluginList.skipped.length === 1, JSON.stringify(ssPluginList.skipped));
+
+const trojan = links.parseShareLink("trojan://mypass@t.example.com:443?sni=t.example.com&type=ws&path=%2Fws&host=t.example.com&allowInsecure=1#TROJAN");
+equal("trojan password", trojan.password, "mypass");
+equal("trojan network", trojan.network, "ws");
+equal("trojan ws path is decoded", trojan["ws-opts"].path, "/ws");
+equal("trojan ws Host header", trojan["ws-opts"].headers.Host, "t.example.com");
+check("trojan allowInsecure maps to skip-cert-verify", trojan["skip-cert-verify"] === true);
+
+const vmessJson = { v: "2", ps: "VMESS节点", add: "v.example.com", port: "443", id: "11111111-2222-3333-4444-555555555555", aid: "0", scy: "auto", net: "ws", host: "v.example.com", path: "/vm", tls: "tls", sni: "v.example.com" };
+const vmess = links.parseShareLink(`vmess://${Buffer.from(JSON.stringify(vmessJson)).toString("base64")}`);
+equal("vmess name comes from ps", vmess.name, "VMESS节点");
+equal("vmess uuid", vmess.uuid, "11111111-2222-3333-4444-555555555555");
+equal("vmess alterId", vmess.alterId, 0);
+check("vmess tls", vmess.tls === true);
+equal("vmess servername", vmess.servername, "v.example.com");
+equal("vmess ws path", vmess["ws-opts"].path, "/vm");
+
+const vless = links.parseShareLink("vless://uuid-here@r.example.com:443?encryption=none&security=reality&sni=r.example.com&fp=chrome&pbk=PUBKEY&sid=abcd&flow=xtls-rprx-vision&type=tcp#REALITY");
+check("vless tls is on for reality", vless.tls === true);
+equal("vless reality public-key", vless["reality-opts"]["public-key"], "PUBKEY");
+equal("vless reality short-id", vless["reality-opts"]["short-id"], "abcd");
+equal("vless flow", vless.flow, "xtls-rprx-vision");
+equal("vless fingerprint", vless["client-fingerprint"], "chrome");
+check("vless reality without pbk is skipped", links.parseShareLink("vless://u@a.com:443?security=reality#x") === null);
+
+const socksNode = links.parseShareLink("socks5://user:pw@127.0.0.1:1080#S");
+equal("socks5 type", socksNode.type, "socks5");
+equal("socks5 username", socksNode.username, "user");
+check("http node works", links.parseShareLink("http://u:p@h.example:8080#H").type === "http");
+check("an unknown scheme is rejected", links.parseShareLink("tuic://x@a.com:443#t") === null);
+check("a non-link line is rejected", links.parseShareLink("just some text") === null);
+check("a link without a port is rejected", links.parseShareLink("trojan://pw@noport#x") === null);
+
+const plainList = ["hysteria2://a@h1.com:443#N1", "trojan://b@h2.com:443#N2", "# a comment", "", "garbage"].join("\n");
+const parsedPlain = links.parseShareLinkList(plainList);
+equal("a plain list parses its nodes", parsedPlain.proxies.length, 2);
+equal("a plain list keeps order", parsedPlain.names.join(","), "N1,N2");
+equal("a plain list reports the junk line (comments and blanks are filtered first)", parsedPlain.skipped.length, 1);
+const b64List = Buffer.from(["trojan://b@h2.com:443#Only", "ss://YWVzOnB3@3.3.3.3:80#Two"].join("\n")).toString("base64");
+const parsedB64 = links.parseShareLinkList(b64List);
+equal("a base64-wrapped list parses", parsedB64.proxies.length, 2);
+check("an empty list returns null", links.parseShareLinkList("") === null);
+
+// 端到端：parseSubscription 必须能直接吃这种订阅
+const subFromLinks = parseSubscription(b64List);
+equal("parseSubscription reports the share-link kind", subFromLinks.kind, "share-links");
+equal("parseSubscription reads the nodes", subFromLinks.names.length, 2);
+equal("parseSubscription returns no rules for a link list", subFromLinks.rules.length, 0);
+const yamlSub = parseSubscription("proxies:\n  - {name: Y, type: ss, server: 1.2.3.4, port: 1, cipher: aes-128-gcm, password: p}\n");
+equal("a YAML subscription still reports the yaml kind", yamlSub.kind, "yaml");
+let unsupportedSubThrew = false;
+try {
+	parseSubscription("this is neither yaml nor links");
+} catch {
+	unsupportedSubThrew = true;
+}
+check("an unrecognizable body still throws", unsupportedSubThrew);
+
+// ---------------------------------------------------------------------------
 section("FlClash 式配置导入");
 const profilesMod = await import("../lib/core/profiles.js");
 

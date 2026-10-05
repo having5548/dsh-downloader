@@ -9,6 +9,62 @@
 
 ## [未发布]
 
+## [0.4.0] - 2026-10-05
+
+用户报「`proxyUrl` 填了才有用、`subscriptionUrl` 填了没用而且不能选节点」之后查出来的三件事。他的订阅是
+`https://static.mp4dns.online/mp4/…`：**base64 分享链接列表，9 个节点全是 `hysteria2` + `salamander` 混淆**。
+
+### 修复
+
+- **`proxyUrl` 会把订阅整个挤掉**（用户报的"填了没用、没有节点可选"）。
+  现象：`proxyUrl` 与 `subscriptionUrl` 都填时，状态显示 `上游模式：explicit`，节点列表里只有一个 `configured-proxy`，
+  订阅从未被读取。
+  根因：`#rebuild()` 里 `explicit` 分支**先匹配并直接 `return`**，`subscription` 分支根本走不到。
+  修法：订阅优先。订阅提供的是**可选节点列表**，`proxyUrl` 只是一条固定上游；现在改为
+  `订阅（节点配置 → subscriptionUrl）→ proxyUrl → 环境代理 → none`，`proxyUrl` 退居两用
+  （抓订阅时的代理、以及订阅拿不到节点时的兜底），并在 `reason` 里说明为什么退了回退。
+- **订阅解析只认 YAML，不认分享链接列表**。
+  现象：解析该订阅直接抛「订阅内容既不是 YAML，也不是 base64 包裹的 YAML」。
+  根因：`parseSubscription()` 只试「原文 YAML」与「base64 → YAML」两条路，没有「一行一个节点 URI」这条路，
+  而这是市面上最常见的订阅格式之一。
+  修法：新增 `lib/core/share-links.js`，支持 `hysteria2://`（含 `salamander` 混淆参数）、`ss://`（三种写法）、
+  `trojan://`、`vmess://`（base64 JSON）、`vless://`（含 `reality`）、`socks5://`、`http(s)://`，
+  明文与 base64 列表都能吃；转成与 Clash YAML 完全等价的节点对象，下游一行未改。
+  认不出的行会**计数并在状态里报告**，不再静默丢弃。
+- **原生连接器没有把混淆参数传下去**。
+  现象：接上连接器后 hysteria2 节点依然连不通（5 秒超时后关闭），且看不出原因。
+  根因：`transports.js` 的 `nativeConnect()` 组装 payload 时漏了 `obfs` / `obfs-password`；
+  服务端拿不到混淆参数会**直接丢掉我们的 QUIC 包**，表现为"拨号超时"而不是认证失败。
+  修法：补上这两个字段；同时给 `salamanderPacketConn` 补 `SetReadBuffer` / `SetWriteBuffer`，
+  消除 quic-go 的 "connection doesn't allow setting of receive buffer size" 警告（否则回退到小缓冲区，掉吞吐）。
+
+### 新增
+
+- **自带 Go 原生连接器，hysteria2（含 salamander 混淆）与 vless reality 现在可用**。
+  原先 `lib/native/connector.exe` 未打包，`hasNativeConnector()` 恒为 false，这两类节点被静默跳过 ——
+  对一份全是 hysteria2 的订阅来说等于"没有可用节点"。
+  本版自编译连接器（`-trimpath -ldflags "-s -w"`，8.7 MB），改动：
+  - 新增 `native/salamander.go`：salamander 混淆的 `net.PacketConn` 包装。
+    线格式：每个数据报 = 8 字节随机 salt ‖ (明文 ⊕ BLAKE2b-256(password‖salt) keystream)。
+    与 `sagernet/sing-quic/hysteria2` 及 hysteria2 参考实现一致。
+  - `native/hysteria2.go`：改用 `quic.Transport{Conn: 包装后的 PacketConn}` + `Transport.Dial()`，
+    因为 `quic.DialAddr()` 会自建 socket，混淆没有插进去的位置；连接关闭时一并关闭 transport。
+  - `native/main.go`：`NodeConfig` 增加 `obfs` / `obfs-password`。
+  - 编译环境：Go 1.25.14（阿里云镜像）+ `GOPROXY=https://goproxy.cn`。
+
+### 实测（用户的真实订阅）
+
+| 项目 | 结果 |
+|---|---|
+| 订阅抓取 | 200，2540 字节，`subscription-userinfo` 报告已用 ≈49.7 GB / 300 GB |
+| 解析 | 9 个节点全部拿到，`hysteria2`，名字/sni/obfs 齐全 |
+| 连通性（经插件 transport） | **9 个里 8 个通**（`HTTP/1.1 204`）；唯一失败的「香港-移动网络专属」名字即说明限移动网络 |
+| 对照：不带混淆 | `dial failed: hysteria2 quic dial: timeout` —— 证明混淆是必需的 |
+
+> 测试 255 → 305 项：分享链接七种协议的解析与边界（ss 三种写法、插件 ss 的不支持标记、
+> vless reality 缺 pbk 拒绝、无名/无端口拒绝、注释与空行先被过滤、base64 与明文列表、
+> `parseSubscription` 的三种 kind 与"认不出仍抛错"）。
+
 ## [0.3.1] - 2026-10-05
 
 两处都是**装上真机实测才暴露**的 bug —— 离线单测覆盖不到「与宿主其它工具/服务交互」的那一层。

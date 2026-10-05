@@ -6,10 +6,10 @@
 
 [简体中文](README.md) | English
 
-![Version](https://img.shields.io/badge/version-0.3.1-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.4.0-4c7ef3?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-255%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-305%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -20,7 +20,7 @@
 
 | | | |
 |---|---|---|
-| 🌏 **Foreign via proxy, domestic direct**<br>`dsh_download` decides and downloads in one call — the model never picks a route | 📦 **Self-contained exit**<br>One Clash subscription URL is enough; ss / trojan / vless / vmess / socks5 / http, **no local Clash required** | 🛡️ **Session keep-alive**<br>22 Chinese AI platform domains pinned direct above every other rule, plus `dsh_session_guard` for `$DSH_HOME/.env` |
+| 🌏 **Foreign via proxy, domestic direct**<br>`dsh_download` decides and downloads in one call — the model never picks a route | 📦 **Self-contained exit**<br>One subscription is enough, **no local Clash required**; accepts Clash YAML and share-link lists, and speaks ss / trojan / vless / vmess / hysteria2 (with salamander obfs) / socks5 / http | 🛡️ **Session keep-alive**<br>22 Chinese AI platform domains pinned direct above every other rule, plus `dsh_session_guard` for `$DSH_HOME/.env` |
 | 🧮 **Offline routing verdict**<br>110k domestic domain suffixes + 8.7k domestic CIDRs; the decision makes **zero network calls** | 🔁 **Automatic fallback**<br>A failed direct attempt (timeout / DNS / reset) is retried through the proxy once, reported as `fallback_used` | 🔐 **Verifiable integrity**<br>sha256 streamed as it goes; the result carries the path, byte count, speed and the route used |
 | 🧯 **No debris on failure**<br>Writes `.part` then renames atomically; **every failure path deletes the partial** | ⏱️ **Large files survive**<br>Host tool timeout deliberately omitted; only your own `downloadTimeoutS` and the stall detector apply | 🖥️ **Settings panel**<br>Status / profile import and management / node list / per-node latency / group select / live traffic / every config field | 🗂️ **FlClash-style profiles**<br>Several configurations (subscription URL / clash:// deep link / local file), each with its own label, last-update time and auto-update interval | 🔒 **Serves this plugin's downloads only**<br>The core binds loopback and requires a per-process token; no other program can reach or borrow it, and the system proxy / environment are never touched |
 
@@ -53,14 +53,14 @@ The two can be used together; they do not interfere. This plugin **never mutates
 From the GitHub release:
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.3.1.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.4.0.tgz
 ```
 
 Or build and install locally:
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.3.1.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.4.0.tgz
 ```
 
 > Profile name: the current Electron desktop app uses `desktop`; the older web CLI used `web`.
@@ -163,16 +163,17 @@ The upstream is resolved in this order; the first hit wins:
 
 | # | Mode | Condition |
 |---|---|---|
-| 1 | `explicit` | `proxyUrl` is set (`http://` or `socks5://`) |
+| 1 | `subscription` | a profile exists or `subscriptionUrl` is set — **self-contained, no local Clash needed**, and nodes are selectable |
+| 2 | `explicit` | `proxyUrl` is set (`http://` or `socks5://`), or the subscription yielded no nodes |
 | 2 | `environment` | not set, but `$HTTPS_PROXY` / `$HTTP_PROXY` is (the `.env` above) |
-| 3 | `subscription` | `subscriptionUrl` is set — **self-contained, no local Clash needed** |
+| 3 | `environment` | neither is set, but `$HTTPS_PROXY` / `$HTTP_PROXY` has a value (the one from `.env`) |
 | 4 | `none` | none of the above: foreign targets fail with an actionable message, domestic ones still download directly |
 
 | Field | Default | Meaning |
 |---|---|---|
 | `enabled` | `true` | master switch |
 | `proxyUrl` | empty | explicit upstream |
-| `subscriptionUrl` | empty | legacy single Clash subscription URL; **consulted only when no profile exists** |
+| `subscriptionUrl` | empty | single subscription URL (same source as a profile import); **takes priority over `proxyUrl`** |
 | `fetchProxyUrl` | empty | used only to fetch the subscription itself (must be `http(s)://`) |
 | `autoUpdateHours` | `24` | refresh interval of the legacy single subscription, and the default interval for newly imported profiles; `0` disables |
 | `groupType` | `url-test` | `url-test` / `select` / `fallback` |
@@ -229,10 +230,23 @@ It also registers a runtime skill, **`smart-download`**, which makes the model p
 | `trojan` (tcp / tls / ws) | ✅ |
 | `vless` (tcp / tls / ws) | ✅ |
 | `vmess` (AEAD alterId=0, tcp / ws) | ✅ |
-| `hysteria2` / `vless reality` | ⚠️ needs the optional Go connector (not bundled; Windows amd64) |
+| `hysteria2` (incl. `salamander` obfs) | ✅ bundled Go connector (Windows amd64) |
+| `vless reality` | ✅ same connector |
 | `tuic` | ❌ |
 
-**To enable hysteria2 / reality**: take `native/connector.exe` from `dsh-clash-proxy` and drop it at `lib/native/connector.exe` inside this package (`dsh_proxy_status` then reports `native connector: present`). Without it those nodes are skipped and counted; other nodes are unaffected.
+**The native connector is bundled**: `lib/native/connector.exe` (self-compiled, with hysteria2's salamander obfs and vless reality). `dsh_proxy_status` reports `native connector: present`. On platforms other than Windows amd64 those nodes are skipped and counted; other nodes are unaffected.
+
+## 📥 Subscription formats
+
+| Format | Notes |
+|---|---|
+| Clash / mihomo YAML | `proxies` + `proxy-groups` + `rules`, fully supported |
+| **base64-wrapped YAML** | what a `?flag=clash` style endpoint often returns |
+| **Share-link lists** (base64 or plain) | one `hysteria2://` / `ss://` / `trojan://` / `vmess://` / `vless://` / `socks5://` / `http(s)://` per line — one of the most common provider formats |
+
+Share links are converted into node objects equivalent to Clash YAML, so nothing downstream (rule engine, transports) had to change. Lines that cannot be read are **counted and reported** (`订阅已加载 9 个节点（跳过 2 条）`) rather than silently dropped.
+
+> `ss` with a plugin (`?plugin=…`) and `tuic` are explicitly reported as unsupported instead of pretending to load.
 
 ## 🔗 How it relates to DSH's built-in proxy
 
@@ -266,7 +280,7 @@ The core (rule engine, CN data, loopback mixed proxy, node transports, subscript
 
 ```bash
 npm install
-node test/smoke.mjs      # 255 checks: rules / subscriptions / profile import / routing / HTTP client / end-to-end / session guard / token gate
+node test/smoke.mjs      # 305 checks: rules / subscriptions / profile import / routing / HTTP client / end-to-end / session guard / token gate
 node --check lib/client.js
 npm pack
 ```
@@ -281,7 +295,7 @@ npm pack
 | The `save_path` check is not a sandbox | Writes use `node:fs` streaming (`ctx.fs` has no streaming write), so it is "policy-checked admission, host-level write" |
 | Filename is derived from the URL by default | `Content-Disposition` is only visible in the result; pass an explicit `save_path` when the name matters |
 | No live progress bar | DSH tools have no MCP-style `report()` channel; progress is only in the final `bytes` / `speed_bps` |
-| `hysteria2` / `reality` need the connector | See above |
+| The native connector is Windows-amd64 only | `lib/native/connector.exe` is a Windows amd64 binary; other platforms skip hysteria2 / reality nodes and count them |
 | One data directory per `$DSH_HOME` | Multiple DSH instances share the profile list, subscription cache and node selection |
 | SOCKS5 inbound is refused in token mode | A SOCKS5 greeting cannot carry the token, so the protocol is refused outright; this plugin's own client uses HTTP CONNECT and is unaffected |
 | The session guard writes outside the workspace | Only when `dsh_session_guard action="apply"` (or the panel button) is called explicitly: it backs `$DSH_HOME/.env` up first and edits only the `NO_PROXY` line |
