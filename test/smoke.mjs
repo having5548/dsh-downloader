@@ -506,6 +506,7 @@ check("profiles report has no undefined", !profilesReport.includes("undefined"),
 check("profiles report marks the current profile", profilesReport.includes("当前"), profilesReport);
 check("profiles report explains file profiles", profilesReport.includes("本地文件不自动更新"), profilesReport);
 check("profiles report renders traffic and expiry", profilesReport.includes("已用") && profilesReport.includes("到期"), profilesReport);
+check("profiles report only counts nodes for the active profile", profilesReport.includes("12 个节点") && !profilesReport.includes("? 个节点"), profilesReport);
 
 const emptyProfiles = asText(__internals.renderProfiles({ action: "list", profiles: [], current_label: null, notes: [] }));
 check("an empty profile list renders a hint", emptyProfiles.includes("还没有导入任何配置"), emptyProfiles);
