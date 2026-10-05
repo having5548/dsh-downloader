@@ -9,6 +9,30 @@
 
 ## [未发布]
 
+## [0.3.1] - 2026-10-05
+
+两处都是**装上真机实测才暴露**的 bug —— 离线单测覆盖不到「与宿主其它工具/服务交互」的那一层。
+
+### 修复
+
+- **`dsh_run_proxied` 委派给 shell 工具时漏传必填的 `description`**。
+  现象：`execute=true` 必然失败，报 `invalid arguments: missing required property "description"`。
+  根因：`dsh-tool-pwsh` / `dsh-tool-bash` 的 `description` 是**必填**参数，而组装委派参数时只带了 `command`（可选 `workdir`）。
+  修法：把组装逻辑抽成纯函数 `buildShellToolArguments()`（可单测）：总是带上 `description`，
+  调用方给了就用调用方的，没给就按命令自动生成（`带代理执行：<前 60 字>`）；并给 `dsh_run_proxied` 增加可选的 `description` 参数。
+- **挂载 / 重启后第一次调用 `dsh_run_proxied` 报「代理内核还没就绪」**。
+  现象：刚装完插件（或刚重启 DSH）立刻调 `dsh_run_proxied` 必定失败；先跑一次 `dsh_proxy_status` 再调就好了。
+  根因：内核是懒启动的（第一次 `resolve()` 才监听端口、生成令牌），而工具直接读 `shellProxyEnv()`，此时端口还是 0。
+  修法：工具先 `await upstream.resolve()` 再取环境；另外在 `apply()` 末尾**异步预热一次**（不 await，慢订阅不拖挂载），
+  让同步的工具守卫也能尽早拿到规则引擎。
+
+### 新增
+
+- `dsh_run_proxied` 新增可选参数 `description`（透传给 shell 工具，写给人看的那句说明）。
+
+> 测试 250 → 255 项，新增 5 条钉住 `buildShellToolArguments()`：一定带 `description`、自动描述含命令、
+> 调用方描述优先（并会 trim）、`workdir` 缺省不出现 / 给定时透传。
+
 ## [0.3.0] - 2026-10-05
 
 ### 新增

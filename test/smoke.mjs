@@ -705,6 +705,14 @@ check("the bash prefix uses export", bashPrefix.includes("export HTTP_PROXY='p';
 equal("buildProxyUrl carries the token", shellProxy.buildProxyUrl({ port: 1234, token: "abc" }), "http://dsh:abc@127.0.0.1:1234");
 check("the explanation names the foreign host", shellProxy.explainShellRouting({ foreign: [{ url: "u", host: "github.com" }] }).includes("github.com"));
 
+// 回归：shell 工具的 description 是必填的，漏了它会被直接拒绝（实测踩过）。
+const delegatedArgs = shellProxy.buildShellToolArguments({ command: "$env:HTTP_PROXY='p'; git clone u" });
+check("the delegated arguments always carry a description", typeof delegatedArgs.description === "string" && delegatedArgs.description.length > 0, JSON.stringify(delegatedArgs));
+check("the generated description names the command", delegatedArgs.description.includes("git clone u"), delegatedArgs.description);
+equal("a caller description wins", shellProxy.buildShellToolArguments({ command: "x", description: "  拉取仓库  " }).description, "拉取仓库");
+check("workdir is omitted when absent", !("workdir" in shellProxy.buildShellToolArguments({ command: "x" })));
+check("workdir is passed through when present", shellProxy.buildShellToolArguments({ command: "x", workdir: "H:\\mycode" }).workdir === "H:\\mycode");
+
 const proxiedReport = asText(__internals.renderProxiedRun({
 	executed: true, shell: "pwsh", command: "x", no_proxy: "n", output: "Cloning into 'y'...", exit_note: null
 }));
