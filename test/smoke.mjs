@@ -199,7 +199,7 @@ equal("bare list parsed", bare.names.join(","), "solo");
 const wrapped = parseSubscription(Buffer.from(yamlBody, "utf8").toString("base64"));
 equal("base64-wrapped parsed", wrapped.names.join(","), "n1,n2");
 
-await expectThrow("garbage subscription rejected", async () => parseSubscription("<<<not yaml at all"), /neither YAML nor base64/);
+await expectThrow("garbage subscription rejected", async () => parseSubscription("<<<not yaml at all"), /既不是 YAML/);
 
 // ---------------------------------------------------------------------------
 section("route.decideRoute");
@@ -216,8 +216,8 @@ equal("force_route=proxy on loopback still direct", decideRoute(`${ORIGIN}/x`, u
 equal("force_route=direct on a foreign host", decideRoute("https://github.com/x", upstreamProxy, "direct").route, "direct");
 check("no upstream => warning + direct", decideRoute("https://github.com/x", upstreamNone).route === "direct");
 check("no upstream sets a warning", typeof decideRoute("https://github.com/x", upstreamNone).warning === "string");
-await expectThrow("foreign with a dead core throws NoUpstreamError", async () => decideRoute("https://github.com/x", upstreamNoExit), /no usable node/);
-await expectThrow("non-http URL rejected", async () => decideRoute("file:///etc/passwd", upstreamProxy), /not an http/);
+await expectThrow("foreign with a dead core throws NoUpstreamError", async () => decideRoute("https://github.com/x", upstreamNoExit), /没有可用节点/);
+await expectThrow("non-http URL rejected", async () => decideRoute("file:///etc/passwd", upstreamProxy), /不是 http\/https/);
 
 // a real NoUpstreamError instance carries a hint
 try {
@@ -244,7 +244,7 @@ await readAll(redirected);
 await expectThrow("redirect loop bounded", async () => {
 	const flow = await httpFlow(`${ORIGIN}/redirect-loop`, { maxRedirects: 3 });
 	await readAll(flow);
-}, /too many redirects/);
+}, /重定向次数超过上限/);
 
 async function readAll(flow) {
 	const chunks = [];
@@ -272,17 +272,17 @@ const named = await attemptDownload({ url: `${ORIGIN}/named`, savePath: path.joi
 equal("content-disposition name is visible to callers", pickFilename(`${ORIGIN}/named`, { "content-disposition": "attachment; filename=\"report final.zip\"" }), "report final.zip");
 equal("named download bytes", named.bytes, 2);
 
-await expectThrow("exists without overwrite", async () => attemptDownload({ url: `${ORIGIN}/payload.bin`, savePath: target, proxy: CORE }), /already exists/);
+await expectThrow("exists without overwrite", async () => attemptDownload({ url: `${ORIGIN}/payload.bin`, savePath: target, proxy: CORE }), /目标文件已存在/);
 const overwritten = await attemptDownload({ url: `${ORIGIN}/payload.bin`, savePath: target, proxy: CORE, overwrite: true });
 equal("overwrite succeeds", overwritten.sha256, PAYLOAD_SHA);
 
 const smallTarget = path.join(tmpRoot, "too-small.bin");
-await expectThrow("size cap aborts mid-stream", async () => attemptDownload({ url: `${ORIGIN}/chunked`, savePath: smallTarget, proxy: CORE, maxBytes: 1024 }), /exceeds the configured limit/);
+await expectThrow("size cap aborts mid-stream", async () => attemptDownload({ url: `${ORIGIN}/chunked`, savePath: smallTarget, proxy: CORE, maxBytes: 1024 }), /超过配置的大小上限/);
 check("size cap removed the .part", !fs.existsSync(`${smallTarget}.part`));
 check("size cap left no file", !fs.existsSync(smallTarget));
 
 const declaredTarget = path.join(tmpRoot, "declared-too-big.bin");
-await expectThrow("declared content-length is refused early", async () => attemptDownload({ url: `${ORIGIN}/too-big`, savePath: declaredTarget, proxy: CORE, maxBytes: 1024 }), /declares/);
+await expectThrow("declared content-length is refused early", async () => attemptDownload({ url: `${ORIGIN}/too-big`, savePath: declaredTarget, proxy: CORE, maxBytes: 1024 }), /服务端声明大小/);
 check("declared-too-big left no .part", !fs.existsSync(`${declaredTarget}.part`));
 
 const missingTarget = path.join(tmpRoot, "missing.bin");
@@ -333,7 +333,7 @@ const withLength = asText(__internals.renderDownload({
 	route: "direct", route_reason: "r", fallback_used: false, upstream: null,
 	http: { status: 200, redirects: 0, content_length: 102400 }, warnings: []
 }));
-check("declared length renders as a size", withLength.includes("declared 100 KB"), withLength);
+check("declared length renders as a size", withLength.includes("声明大小 100 KB"), withLength);
 
 const minimal = asText(__internals.renderDownload({ ok: true }));
 check("a sparse success payload still renders", !minimal.includes("undefined") && !minimal.includes("NaN"), minimal);
@@ -349,7 +349,7 @@ const statusReport = asText(__internals.renderStatus({
 }));
 check("status report has no undefined", !statusReport.includes("undefined"), statusReport);
 check("status report has no NaN", !statusReport.includes("NaN"), statusReport);
-check("status report shows the node count", statusReport.includes("nodes: 3"), statusReport);
+check("status report shows the node count", statusReport.includes("节点数：3"), statusReport);
 check("status report lists the node with its delay", statusReport.includes("JP-01 [trojan] 120ms"), statusReport);
 
 const geoReport = asText(__internals.renderGeo({
@@ -366,18 +366,18 @@ const geoBare = asText(__internals.renderGeo({
 	input: "h", host: "h", route: "direct", reason: "r", resolved_ips: [], geo: null, geo_source: null,
 	proxy_available: false, proxy_mode: "none", ping: null, advice: null
 }));
-check("a geo verdict without DNS still renders", !geoBare.includes("undefined") && geoBare.includes("(none)"), geoBare);
+check("a geo verdict without DNS still renders", !geoBare.includes("undefined") && geoBare.includes("（无）"), geoBare);
 
 check("plain() unwraps a Volatile-like container", __internals.plain({ a: { get: () => 1 } }).a.get() === 1);
 
 const stallTarget = path.join(tmpRoot, "stall.bin");
-await expectThrow("stall detector aborts", async () => attemptDownload({ url: `${ORIGIN}/slow`, savePath: stallTarget, proxy: CORE, stallS: 3, timeoutS: 30 }), /stalled/);
+await expectThrow("stall detector aborts", async () => attemptDownload({ url: `${ORIGIN}/slow`, savePath: stallTarget, proxy: CORE, stallS: 3, timeoutS: 30 }), /下载停滞/);
 check("stall left no .part", !fs.existsSync(`${stallTarget}.part`));
 
 const cancelTarget = path.join(tmpRoot, "cancel.bin");
 const controller = new AbortController();
 setTimeout(() => controller.abort(), 150);
-await expectThrow("caller cancellation aborts", async () => attemptDownload({ url: `${ORIGIN}/slow`, savePath: cancelTarget, proxy: CORE, stallS: 60, timeoutS: 60, signal: controller.signal }), /cancell/);
+await expectThrow("caller cancellation aborts", async () => attemptDownload({ url: `${ORIGIN}/slow`, savePath: cancelTarget, proxy: CORE, stallS: 60, timeoutS: 60, signal: controller.signal }), /已取消/);
 check("cancellation left no .part", !fs.existsSync(`${cancelTarget}.part`));
 
 // ---------------------------------------------------------------------------
@@ -472,7 +472,7 @@ guard.restoreGuard({ envPath: guardEnv });
 const restoredText = fs.readFileSync(guardEnv, "utf8");
 check("restore brings the original NO_PROXY back", restoredText.includes("NO_PROXY=localhost") && !restoredText.includes("deepseek.com"));
 check("restore leaves the proxy var alone", restoredText.includes("HTTPS_PROXY=http://127.0.0.1:7890"));
-await expectThrow("restore without a backup fails loudly", async () => guard.restoreGuard({ envPath: path.join(guardDir, "missing.env") }), /no backup/);
+await expectThrow("restore without a backup fails loudly", async () => guard.restoreGuard({ envPath: path.join(guardDir, "missing.env") }), /找不到可还原的备份/);
 
 const guardReport = asText(__internals.renderGuard({
 	action: "apply", env_path: guardEnv, exists: true, proxy_vars: ["HTTPS_PROXY"], no_proxy: "localhost,deepseek.com",
@@ -480,7 +480,7 @@ const guardReport = asText(__internals.renderGuard({
 	protected_domains: [], changed: true, added_count: 82, backup_path: "x.bak", restored: false, notes: []
 }));
 check("guard report has no undefined", !guardReport.includes("undefined"), guardReport);
-check("guard report mentions the backup", guardReport.includes("backup: x.bak"));
+check("guard report mentions the backup", guardReport.includes("备份：x.bak"));
 
 // ---------------------------------------------------------------------------
 section("client bundle and patch metadata");

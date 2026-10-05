@@ -9,6 +9,32 @@
 
 ## [未发布]
 
+## [0.1.3] - 2026-10-05
+
+### 变更
+
+- **面向模型与用户的文案全部中文化**。
+  现象：工具描述、参数说明、工具卡片标题、工具返回的文本、错误提示与运行时技能正文都是英文，用户看不懂。
+  根因：初版按"代码注释英文、对外文案随手写"的方式实现，没有区分「开发者日志」与「模型/用户可见文案」。
+  修法：
+  - 四个工具（`dsh_download` / `dsh_proxy_status` / `dsh_geo_check` / `dsh_session_guard`）的 `description`
+    与全部参数 `description` 改中文；
+  - `renderDownload` / `renderStatus` / `renderGeo` / `renderGuard` 的输出改中文，并新增
+    `routeLabel` / `stateLabel` / `modeLabel`，把 `direct` / `running` / `subscription` 这类标识符
+    渲染成「direct（直连）」「运行中」「上游：自包含订阅」；
+  - 配置项 `Config` 的 `.description()` 改中文（设置面板与自动表单都会用到）；
+  - `route.js` / `fetch-file.js` / `http.js` / `upstream.js` / `session-guard.js` / `subscription.js`
+    的错误与状态文案改中文；
+  - `smart-download` 运行时技能的 `whenToUse` / `description` / 正文改中文；
+  - 管理面板的状态与上游模式徽标改中文（新增 `stRunning` / `mdSubscription` 等词条）。
+  - **刻意保持英文的部分**：`ctx.logger` 的开发者日志（便于 grep）、工具返回值的 JSON 键名
+    （`saved_to` / `sha256` / `route` 等仍是 API 契约，中英文档都按这些名字说明）、
+    以及 vendor 代码（`transports.js` / `vmess.js` / `rules.js`）—— 后者的错误不会直接到达用户，
+    `ProxyServer` 只回 502，用户看到的是中文的「代理 CONNECT 被拒绝」。
+- 冒烟测试的断言正则同步改为匹配中文消息。
+
+> 本版无功能与行为改动，仅文案语言。
+
 ## [0.1.2] - 2026-10-05
 
 ### 变更
