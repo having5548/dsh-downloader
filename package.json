@@ -1,0 +1,86 @@
+{
+  "name": "@having5548/dsh-downloader",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 下载代理插件：注册 dsh_download 等工具，让模型下载境外文件时自动走插件自带的代理内核（订阅自包含，或显式 proxyUrl），境内直连；带 sha256、大小上限、停滞检测与直连失败自动回退，另附「设置 → 下载代理」管理面板。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "download",
+    "proxy",
+    "clash",
+    "subscription",
+    "smart-routing"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/having5548/dsh-downloader.git"
+  },
+  "homepage": "https://github.com/having5548/dsh-downloader#readme",
+  "bugs": {
+    "url": "https://github.com/having5548/dsh-downloader/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node test/smoke.mjs",
+    "test:e2e": "node test/e2e.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/cosmokit": "^1.8.5",
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "js-yaml": "^4.1.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-client-runtime": "*",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-client-runtime": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}

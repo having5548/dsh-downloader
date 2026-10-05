@@ -1,0 +1,9 @@
+# dsh-downloader —— DSH bundle patch
+# 安装后由 DSH 启动时按 bundle 层栈叠加，把下载代理插件插入 profile。
+# 单条双面行：node 半边注册下载工具与订阅内核，client 半边
+# （见 package.json 的 dsh.client）把管理面板挂进 settings.section。
+# 这里刻意不声明 inject：timer / skills / webServer / settings 都是可选的，
+# 由插件在 apply 里惰性 ctx.inject 解析，缺任一都不会让整插件停在 pending。
+- insert:
+    - id: dsh-downloader
+      name: '@having5548/dsh-downloader'
