@@ -9,6 +9,20 @@
 
 ## [未发布]
 
+## [0.1.4] - 2026-10-05
+
+### 修复
+
+- **两处对外文案漏翻，仍在打印原始英文标识符**。
+  现象：`dsh_download` 的返回里显示「上游：模式=subscription」，`dsh_session_guard` 的返回里显示「动作：apply」，
+  而同一份输出在别处已经渲染成「上游：自包含订阅」。
+  根因：0.1.3 新增了 `routeLabel` / `stateLabel` / `modeLabel` 并接到 `renderStatus`，但 `renderDownload`
+  的 upstream 一行与 `renderGuard` 的 action 一行直接用了 `shown(value…)`，漏了对应的标签函数。
+  修法：`renderDownload` 改用 `modeLabel(value.upstream.mode)`；新增 `actionLabel()` 并让 `renderGuard` 使用。
+  冒烟测试补三条断言（下载结果/状态结果/会话保护结果都必须出现本地化标签），合计 171 项。
+
+> 本版仅修文案，无功能与行为改动。
+
 ## [0.1.3] - 2026-10-05
 
 ### 变更

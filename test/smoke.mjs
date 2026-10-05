@@ -351,6 +351,8 @@ check("status report has no undefined", !statusReport.includes("undefined"), sta
 check("status report has no NaN", !statusReport.includes("NaN"), statusReport);
 check("status report shows the node count", statusReport.includes("节点数：3"), statusReport);
 check("status report lists the node with its delay", statusReport.includes("JP-01 [trojan] 120ms"), statusReport);
+check("status report localizes the state and mode", statusReport.includes("running（运行中）") && statusReport.includes("subscription（自包含订阅）"), statusReport);
+check("download report localizes the upstream mode", downloadReport.includes("subscription（自包含订阅）"), downloadReport);
 
 const geoReport = asText(__internals.renderGeo({
 	input: "github.com", host: "github.com", route: "proxy", reason: "foreign", resolved_ips: ["1.2.3.4"],
@@ -481,6 +483,7 @@ const guardReport = asText(__internals.renderGuard({
 }));
 check("guard report has no undefined", !guardReport.includes("undefined"), guardReport);
 check("guard report mentions the backup", guardReport.includes("备份：x.bak"));
+check("guard report localizes the action", guardReport.includes("apply（写入 NO_PROXY）"), guardReport);
 
 // ---------------------------------------------------------------------------
 section("client bundle and patch metadata");
