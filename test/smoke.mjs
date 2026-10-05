@@ -667,6 +667,57 @@ check(
 gated.stop();
 
 // ---------------------------------------------------------------------------
+section("shell 代理适配（git / curl）");
+const shellProxy = await import("../lib/core/shell-proxy.js");
+const shellEngine = new RuleEngine({});
+
+equal("extractHttpUrls finds one", shellProxy.extractHttpUrls("git clone https://github.com/x/y.git").join(","), "https://github.com/x/y.git");
+equal("extractHttpUrls dedupes", shellProxy.extractHttpUrls("curl https://a.com/1 https://a.com/1").length, 1);
+equal("extractHttpUrls strips trailing punctuation", shellProxy.extractHttpUrls("curl https://a.com/x.").join(","), "https://a.com/x");
+
+const foreignVerdict = shellProxy.classifyShellCommand("git clone https://github.com/x/y.git", shellEngine);
+check("a foreign git clone is detected", foreignVerdict.isDownload === true && foreignVerdict.foreign.length === 1, JSON.stringify(foreignVerdict));
+check("a foreign curl is detected", shellProxy.classifyShellCommand("curl -O https://objects.githubusercontent.com/a.zip", shellEngine).foreign.length === 1);
+check("Invoke-WebRequest is detected", shellProxy.classifyShellCommand("Invoke-WebRequest https://github.com/x", shellEngine).foreign.length === 1);
+
+check("a domestic curl is not flagged", shellProxy.classifyShellCommand("curl https://www.baidu.com/x", shellEngine).foreign.length === 0);
+check(
+	"an already-proxied command is not flagged",
+	(() => {
+		const verdict = shellProxy.classifyShellCommand("$env:HTTP_PROXY='x'; curl https://github.com/x", shellEngine);
+		return verdict.alreadyProxied === true && verdict.foreign.length === 0;
+	})()
+);
+check("a curl with -x is not flagged", shellProxy.classifyShellCommand("curl -x http://127.0.0.1:7890 https://github.com/x", shellEngine).foreign.length === 0);
+check("a loopback curl is not flagged", shellProxy.classifyShellCommand("curl http://127.0.0.1:8080/health", shellEngine).foreign.length === 0);
+check("a private-ip curl is not flagged", shellProxy.classifyShellCommand("curl http://192.168.1.5/x", shellEngine).foreign.length === 0);
+check("an ssh remote is not flagged (env proxy cannot help it)", shellProxy.classifyShellCommand("git clone git@github.com:x/y.git", shellEngine).foreign.length === 0);
+check("a git push is not treated as a download", shellProxy.classifyShellCommand("git push origin main", shellEngine).isDownload === false);
+check("an unrelated command is not treated as a download", shellProxy.classifyShellCommand("npm run build", shellEngine).isDownload === false);
+check("without an engine nothing is flagged", shellProxy.classifyShellCommand("git clone https://github.com/x/y.git", null).foreign.length === 0);
+check("a rejected host is not flagged as foreign", shellProxy.classifyShellCommand("curl https://blocked.example/x", new RuleEngine({ extraRules: ["DOMAIN-SUFFIX,blocked.example,REJECT"] })).foreign.length === 0);
+
+const pwshPrefix = shellProxy.buildShellPrefix({ shell: "pwsh", proxyUrl: "http://dsh:t@127.0.0.1:9", noProxy: "localhost,deepseek.com" });
+check("the pwsh prefix assigns $env vars", pwshPrefix.includes("$env:HTTP_PROXY='http://dsh:t@127.0.0.1:9';"), pwshPrefix);
+check("the pwsh prefix also sets lowercase names", pwshPrefix.includes("$env:https_proxy=") && pwshPrefix.includes("$env:no_proxy='localhost,deepseek.com';"));
+const bashPrefix = shellProxy.buildShellPrefix({ shell: "bash", proxyUrl: "p", noProxy: "n" });
+check("the bash prefix uses export", bashPrefix.includes("export HTTP_PROXY='p';"), bashPrefix);
+equal("buildProxyUrl carries the token", shellProxy.buildProxyUrl({ port: 1234, token: "abc" }), "http://dsh:abc@127.0.0.1:1234");
+check("the explanation names the foreign host", shellProxy.explainShellRouting({ foreign: [{ url: "u", host: "github.com" }] }).includes("github.com"));
+
+const proxiedReport = asText(__internals.renderProxiedRun({
+	executed: true, shell: "pwsh", command: "x", no_proxy: "n", output: "Cloning into 'y'...", exit_note: null
+}));
+check("the proxied-run report has no undefined", !proxiedReport.includes("undefined"), proxiedReport);
+check("the proxied-run report shows the output", proxiedReport.includes("Cloning into"), proxiedReport);
+
+const proxiedDryRun = asText(__internals.renderProxiedRun({
+	executed: false, shell: "pwsh", command: "$env:HTTP_PROXY='p'; git clone u", no_proxy: "n", output: null, exit_note: "原样交给 shell 工具执行即可。"
+}));
+check("the dry-run report shows the command", proxiedDryRun.includes("git clone u"), proxiedDryRun);
+check("the dry-run report has no undefined", !proxiedDryRun.includes("undefined"), proxiedDryRun);
+
+// ---------------------------------------------------------------------------
 section("client bundle and patch metadata");
 const vm = await import("node:vm");
 const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));

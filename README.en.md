@@ -6,10 +6,10 @@
 
 [简体中文](README.md) | English
 
-![Version](https://img.shields.io/badge/version-0.2.1-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.3.0-4c7ef3?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-225%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-250%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -53,14 +53,14 @@ The two can be used together; they do not interfere. This plugin **never mutates
 From the GitHub release:
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.2.1.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.3.0.tgz
 ```
 
 Or build and install locally:
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.2.1.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.3.0.tgz
 ```
 
 > Profile name: the current Electron desktop app uses `desktop`; the older web CLI used `web`.
@@ -101,6 +101,30 @@ The proxy serves **only** download requests this plugin initiates. That is not a
 `dsh_proxy_status` reports all three in its `scope` field, and the "Upstream" card in the panel states them too.
 
 **In other words**: even if something scanned the port it could not use it — and no traffic other than `dsh_download` has ever passed through this plugin.
+
+## 🧩 git / curl downloads also go through this proxy
+
+`git` and `curl` run in shell child processes, and a tool-type plugin cannot intercept them out of process. So this is implemented as **two halves**:
+
+**① A tool that hands the model a proxied command** (`dsh_run_proxied`):
+
+```
+dsh_run_proxied({ command: "git clone https://github.com/x/y.git" })
+```
+
+It injects the proxy environment (`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` and the lowercase forms, pointing at this plugin's core) for **that one** shell call, then hands it to the **ordinary shell tool** — the sandbox and permission presets still apply; this is not a side door. Domestic targets are still resolved by the core, and the Chinese AI platform domains go into `NO_PROXY` so they never even reach it.
+
+With `execute=false` it only returns the composed command, for you or the model to run through `pwsh` directly.
+
+**② A tool guard** (`guardShellDownloads`, on by default):
+
+When a shell command looks like a foreign download without a proxy (`git clone|fetch|pull|submodule`, `curl`, `wget`, `Invoke-WebRequest`, with a target the offline rules classify as foreign), it is **denied** with a message pointing at `dsh_run_proxied` or `dsh_download`.
+
+Not denied: a command that already carries a proxy (`HTTP_PROXY`, `curl -x`, `git -c http.proxy`); loopback/private targets; when the core has no usable exit (blocking with no alternative is worse than not blocking); and SSH remotes (`git@github.com:…` is not HTTP, so a proxy environment variable cannot help it).
+
+Turn it off in settings if it gets in the way.
+
+**For a plain file download, prefer `dsh_download`** — it brings sha256, the size cap, the stall detector and fallback. `dsh_run_proxied` exists for cases where git/curl itself is required (cloning a repository, calling an API).
 
 ## 🛡️ Session guard: Chinese AI platforms never go through a proxy
 
@@ -157,6 +181,7 @@ The upstream is resolved in this order; the first hit wins:
 | `domesticDirect` | `true` | turn off to send everything through the proxy (**AI platforms still direct**) |
 | `protectAiPlatforms` | `true` | pin the Chinese AI platform domains direct at the highest priority |
 | `extraDirectDomains` | `[]` | extra domains to force direct (full URLs and `*.x.com` accepted) |
+| `guardShellDownloads` | `true` | deny foreign shell downloads that carry no proxy, pointing at `dsh_run_proxied` |
 | `extraRules` / `excludeRules` | `[]` | add / drop rule lines |
 | `downloadDir` | empty | empty = `$DSH_HOME/downloads` |
 | `maxDownloadMb` | `512` | per-file size limit |
@@ -177,6 +202,7 @@ Data directory: `$DSH_HOME/dsh-downloader/` — `profiles.json` (the profile lis
 | `dsh_geo_check` | Verdict on whether a URL or host goes direct or through the proxy. **Uses the embedded offline rule tables first (zero network)**; DNS + online GeoIP + ping only when the tables cannot decide. |
 | `dsh_session_guard` | Checks / writes / restores `NO_PROXY` in `$DSH_HOME/.env` (see the session guard above). |
 | `dsh_profile` | Manages node profiles (FlClash-style): list / import from a subscription URL or a `clash://` deep link / import from configuration text / update / select / delete / toggle auto-update / reorder / rename. |
+| `dsh_run_proxied` | Runs a `git` / `curl` style shell download through this plugin's proxy, for that one call only (still via the ordinary shell tool and its permission policy). |
 
 It also registers a runtime skill, **`smart-download`**, which makes the model prefer `dsh_download` over `curl` for internet downloads.
 
@@ -240,7 +266,7 @@ The core (rule engine, CN data, loopback mixed proxy, node transports, subscript
 
 ```bash
 npm install
-node test/smoke.mjs      # 224 checks: rules / subscriptions / profile import / routing / HTTP client / end-to-end / session guard / token gate
+node test/smoke.mjs      # 250 checks: rules / subscriptions / profile import / routing / HTTP client / end-to-end / session guard / token gate
 node --check lib/client.js
 npm pack
 ```

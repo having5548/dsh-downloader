@@ -9,6 +9,37 @@
 
 ## [未发布]
 
+## [0.3.0] - 2026-10-05
+
+### 新增
+
+- **`git` / `curl` 等 shell 下载也走本插件的代理**（用户要求：凡是需要下载境外内容都走代理插件）。
+  背景：`git` / `curl` 跑在 shell 子进程里，工具型插件无法在进程外截获它们，因此做成两条腿。
+  - 新增 `lib/core/shell-proxy.js`：
+    - `extractHttpUrls()` 从命令里取 http(s) URL；
+    - `classifyShellCommand()` 判定这是不是「下载类命令」（`git clone|fetch|pull|submodule`、`curl`、`wget`、`Invoke-WebRequest`），
+      并用**离线规则引擎**判断目标是否境外；SSH 远端（`git@host:…`）不判定，因为代理环境变量对它无效；
+      命令里已带代理（`HTTP_PROXY` / `curl -x` / `--proxy` / `http.proxy`）时直接放行；
+    - `buildProxyUrl()` / `buildShellPrefix()` 生成 `http://dsh:<令牌>@127.0.0.1:<端口>` 与 pwsh / bash 两种前缀；
+    - `explainShellRouting()` 生成给模型看的中文说明。
+  - 新增工具 **`dsh_run_proxied`**：为**这一次** shell 调用注入代理环境（内核再按规则决定直连还是走节点），
+    然后**委派给真正的 shell 工具**（`ctx.tools.execute`）执行 —— 沙箱与权限预设照常生效，不是绕过策略的后门。
+    `execute=false` 时只返回拼好的命令。
+  - 新增工具守卫 **`guardShellDownloads`**（配置项，默认开）：检测到没带代理的境外 shell 下载时拦下来，
+    提示改用 `dsh_run_proxied`（下文件则用 `dsh_download`）。内核没有可用出口时不拦 —— 拦下来却没有替代方案比不拦更糟。
+  - `UpstreamManager.shellProxyEnv()` 提供代理 URL 与 `NO_PROXY`；`NO_PROXY` 复用 `composeNoProxy()`，
+    即「回环 + 国内 AI 平台域名」，让这些目标连内核都不必经过。
+  - 管理面板的规则卡片新增 `guardShellDownloads` 开关。
+  - `smart-download` 技能补入这一段工作约定。
+
+### 兼容
+
+- 代理令牌会随 `dsh_run_proxied` 的命令前缀进入该次 shell 调用与会话记录。这是必须的：客户端要拿它通过令牌鉴权。
+  它每个 DSH 进程重新生成，且只能访问用户自己的订阅节点。
+
+> 测试 225 → 250 项：URL 提取与去重、境外/境内/回环/内网/SSH/已带代理/REJECT 六类判定、pwsh 与 bash 前缀生成、
+> 代理 URL 组成，以及 `dsh_run_proxied` 的两种渲染。
+
 ## [0.2.1] - 2026-10-05
 
 ### 修复

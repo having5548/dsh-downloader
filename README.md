@@ -6,10 +6,10 @@
 
 简体中文 | [English](README.en.md)
 
-![Version](https://img.shields.io/badge/version-0.2.1-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.3.0-4c7ef3?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-225%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-250%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -53,14 +53,14 @@ NO_PROXY=localhost,127.0.0.1,::1,deepseek.com,.deepseek.com
 从 GitHub Release 安装：
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.2.1.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.3.0.tgz
 ```
 
 本地打包安装：
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.2.1.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.3.0.tgz
 ```
 
 > profile 名：新版桌面端是 `desktop`，旧版 Web 端是 `web`。
@@ -101,6 +101,35 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.2.1.tgz
 `dsh_proxy_status` 的返回里有 `scope` 字段如实报告这三条；面板的「上游」卡片也会写出来。
 
 **换句话说**：就算这个端口被人扫到，他也用不了；而除 `dsh_download` 以外的任何流量，从来没有经过这个插件。
+
+## 🧩 git / curl 下载境外内容：也走这个代理
+
+`git` / `curl` 跑在 shell 子进程里，工具型插件无法在进程外截获它们。所以这里做成**两条腿**：
+
+**① 给模型一条带上代理的命令**（`dsh_run_proxied`）：
+
+```
+dsh_run_proxied({ command: "git clone https://github.com/x/y.git" })
+```
+
+它会为**这一次** shell 调用注入代理环境（`HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 及小写形式，指向本插件内核），
+然后交给**正常的 shell 工具**执行 —— 沙箱与权限策略照常生效，不是另开一条后门。
+国内目标仍由内核判定直连；国内 AI 平台域名写进 `NO_PROXY`，连内核都不经过。
+
+`execute=false` 时它只返回拼好的命令，你或模型自己用 pwsh 跑也行。
+
+**② 一条工具守卫**（`guardShellDownloads`，默认开）：
+
+当 shell 命令看起来要从境外下载、又没带代理时（`git clone|fetch|pull|submodule`、`curl`、`wget`、
+`Invoke-WebRequest` 且目标经离线规则判定为境外），命令会被**拦下来**，并提示改用 `dsh_run_proxied` 或 `dsh_download`。
+
+不会被拦的情况：命令里已经带了代理（`HTTP_PROXY`、`curl -x`、`git -c http.proxy`）；目标是回环/内网；
+内核没有可用出口（拦下来却没有替代方案比不拦更糟）；SSH 形式（`git@github.com:…` 不走 HTTP，代理环境变量对它无效）。
+
+嫌它碍事可以在设置里关掉。
+
+**只是要下一个文件时，优先 `dsh_download`** —— 它带 sha256、大小上限、停滞检测与失败回退。
+`dsh_run_proxied` 是给"必须用 git/curl 本身"的场景（克隆仓库、调用 API）准备的。
 
 ## 🛡️ 会话保护：国内 AI 平台强制直连
 
@@ -154,6 +183,7 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.2.1.tgz
 | `domesticDirect` | `true` | 关掉则所有下载都走代理（**AI 平台仍直连**） |
 | `protectAiPlatforms` | `true` | 国内 AI 平台域名强制直连，最高优先级 |
 | `extraDirectDomains` | `[]` | 追加强制直连的域名（支持完整 URL 与 `*.x.com`） |
+| `guardShellDownloads` | `true` | 拦住没走代理的境外 shell 下载，提示改用 `dsh_run_proxied` |
 | `extraRules` / `excludeRules` | `[]` | 追加 / 剔除规则行 |
 | `downloadDir` | 空 | 空 = `$DSH_HOME/downloads` |
 | `maxDownloadMb` | `512` | 单文件大小上限 |
@@ -174,6 +204,7 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.2.1.tgz
 | `dsh_geo_check` | 判定某个 URL / 主机走直连还是代理。**优先用内置离线规则库（不发任何网络请求）**，只有规则判不出来时才做 DNS + 在线 GeoIP + ping。 |
 | `dsh_session_guard` | 检查 / 写入 / 还原 `$DSH_HOME/.env` 的 `NO_PROXY`（见上文「会话保护」）。 |
 | `dsh_profile` | 管理节点配置（FlClash 式）：列出 / 从订阅地址或 `clash://` 深链导入 / 从配置正文导入 / 更新 / 选择 / 删除 / 开关自动更新 / 排序 / 改名。 |
+| `dsh_run_proxied` | 让 `git` / `curl` 这类 shell 下载走本插件的代理（只作用于这一次调用，仍走正常 shell 工具与权限策略）。 |
 
 另注册一个运行时技能 **`smart-download`**：让模型在"下载互联网文件"类任务上优先用 `dsh_download`，而不是 `curl`。
 
@@ -237,7 +268,7 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.2.1.tgz
 
 ```bash
 npm install
-node test/smoke.mjs      # 224 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
+node test/smoke.mjs      # 250 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
 node --check lib/client.js
 npm pack
 ```
