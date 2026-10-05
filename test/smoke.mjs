@@ -381,6 +381,146 @@ await expectThrow("caller cancellation aborts", async () => attemptDownload({ ur
 check("cancellation left no .part", !fs.existsSync(`${cancelTarget}.part`));
 
 // ---------------------------------------------------------------------------
+section("AI platform protection");
+const { AI_DIRECT_DOMAINS, composeDirectDomains, directRuleLines, normalizeDomain } = await import("../lib/core/ai-domains.js");
+
+check("every built-in AI domain is a usable bare suffix", AI_DIRECT_DOMAINS.every((d) => d === d.toLowerCase() && d.includes(".") && !/[\/\s]/.test(d)));
+check("the AI domain list has no duplicates", new Set(AI_DIRECT_DOMAINS).size === AI_DIRECT_DOMAINS.length);
+check("the list covers the majors", ["deepseek.com", "bigmodel.cn", "moonshot.cn", "dashscope.aliyuncs.com", "volces.com", "minimax.chat"].every((d) => AI_DIRECT_DOMAINS.includes(d)));
+
+equal("normalizeDomain strips scheme, case and path", normalizeDomain("HTTPS://API.Example.COM/v1/models"), "api.example.com");
+equal("normalizeDomain strips a wildcard", normalizeDomain("*.example.com"), "example.com");
+equal("normalizeDomain rejects junk", normalizeDomain("not a domain"), "");
+equal("normalizeDomain rejects a bare word", normalizeDomain("localhost"), "");
+
+const composed = composeDirectDomains({ protectAiPlatforms: true, extraDirectDomains: ["https://api.mycorp.example/v1", "*.extra.cn"] });
+check("composeDirectDomains keeps the built-ins", composed.includes("deepseek.com"));
+check("composeDirectDomains normalizes a user URL", composed.includes("api.mycorp.example"));
+check("composeDirectDomains normalizes a user wildcard", composed.includes("extra.cn"));
+check("protectAiPlatforms=false drops the built-ins", !composeDirectDomains({ protectAiPlatforms: false }).includes("deepseek.com"));
+
+// The core promise: AI platforms stay direct even when everything else is proxied.
+const allProxyUnprotected = new RuleEngine({ extraRules: ["MATCH,PROXY"] });
+equal("without protection everything is proxied", allProxyUnprotected.decide("api.deepseek.com"), "proxy");
+
+const allProxyGuarded = new RuleEngine({ extraRules: [...directRuleLines(composeDirectDomains({})), "MATCH,PROXY"] });
+equal("deepseek stays direct under MATCH,PROXY", allProxyGuarded.decide("api.deepseek.com"), "direct");
+equal("the deepseek apex is direct too", allProxyGuarded.decide("deepseek.com"), "direct");
+equal("bigmodel stays direct", allProxyGuarded.decide("open.bigmodel.cn"), "direct");
+equal("moonshot stays direct", allProxyGuarded.decide("api.moonshot.cn"), "direct");
+equal("dashscope stays direct", allProxyGuarded.decide("dashscope.aliyuncs.com"), "direct");
+equal("volces stays direct", allProxyGuarded.decide("ark.cn-beijing.volces.com"), "direct");
+equal("kimi stays direct", allProxyGuarded.decide("api.kimi.com"), "direct");
+equal("a foreign host is still proxied", allProxyGuarded.decide("github.com"), "proxy");
+equal("an unrelated domestic host is still proxied under MATCH,PROXY", allProxyGuarded.decide("www.baidu.com"), "proxy");
+
+// Protection outranks a user rule that comes later.
+const userTriedToProxy = new RuleEngine({ extraRules: [...directRuleLines(composeDirectDomains({})), "DOMAIN-SUFFIX,deepseek.com,PROXY"] });
+equal("protection outranks a later user rule", userTriedToProxy.decide("api.deepseek.com"), "direct");
+
+// ---------------------------------------------------------------------------
+section("session guard (NO_PROXY in $DSH_HOME/.env)");
+const guard = await import("../lib/core/session-guard.js");
+
+equal("splitEntries splits on commas and whitespace", guard.splitEntries("a.com, b.com  c.com").join("|"), "a.com|b.com|c.com");
+equal("readNoProxy finds the value", guard.readNoProxy("FOO=1\nNO_PROXY=a.com,b.com\n"), "a.com,b.com");
+equal("readNoProxy is case-insensitive", guard.readNoProxy("no_proxy=x.com"), "x.com");
+equal("readNoProxy returns empty when absent", guard.readNoProxy("FOO=1"), "");
+equal("missingDomains accepts the dot form", guard.missingDomains(".deepseek.com", ["deepseek.com"]).length, 0);
+equal("missingDomains reports gaps", guard.missingDomains("a.com", ["a.com", "b.com"]).join(","), "b.com");
+equal("composeNoProxy preserves existing order", guard.composeNoProxy("z.com", ["a.com"]).split(",")[0], "z.com");
+check("composeNoProxy emits both spellings", guard.composeNoProxy("", ["a.com"]).includes("a.com,.a.com"));
+check("composeNoProxy adds loopback", guard.composeNoProxy("", []).includes("127.0.0.1"));
+equal("composeNoProxy keeps a wildcard", guard.composeNoProxy("*", ["a.com"]), "*");
+check("missingDomains yields nothing under a wildcard", guard.missingDomains("*", ["a.com"]).length === 0);
+check("envFilePath ends in .env", guard.envFilePath("H:/tmp/home").endsWith(".env"));
+
+const baseEnv = "FOO=bar\nHTTPS_PROXY=http://127.0.0.1:7890\nno_proxy=localhost\n";
+const merged = guard.upsertNoProxy(baseEnv, "localhost,deepseek.com");
+check("upsertNoProxy rewrites the existing line", merged.includes("NO_PROXY=localhost,deepseek.com"), merged);
+check("upsertNoProxy keeps unrelated lines", merged.includes("FOO=bar") && merged.includes("HTTPS_PROXY=http://127.0.0.1:7890"));
+check("upsertNoProxy does not duplicate the key", (merged.match(/no_proxy/gi) || []).length === 1);
+check("upsertNoProxy preserves CRLF", guard.upsertNoProxy("A=1\r\nNO_PROXY=x\r\n", "y").includes("\r\n"));
+check("upsertNoProxy appends when absent", guard.upsertNoProxy("A=1\n", "x").includes("NO_PROXY=x"));
+
+const guardDir = path.join(tmpRoot, "guard");
+const guardEnv = path.join(guardDir, ".env");
+const guardDomains = ["deepseek.com", "bigmodel.cn"];
+const countProxyVars = (text) => (text.match(/^\s*https?_proxy\s*=/gim) || []).length;
+fs.mkdirSync(guardDir, { recursive: true });
+fs.writeFileSync(guardEnv, "HTTPS_PROXY=http://127.0.0.1:7890\nNO_PROXY=localhost\n", "utf8");
+
+const guardBefore = guard.inspectGuard({ envPath: guardEnv, domains: guardDomains });
+check("inspect sees the gap", guardBefore.covered === false && guardBefore.missing.length === 2, JSON.stringify(guardBefore));
+check("inspect lists the proxy var", guardBefore.proxy_vars.join(",") === "HTTPS_PROXY");
+check("inspect suggests a line", guardBefore.suggested_line.startsWith("NO_PROXY="));
+
+const applied = guard.applyGuard({ envPath: guardEnv, domains: guardDomains });
+check("apply reports a change", applied.changed === true);
+check("apply wrote a backup", applied.backupPath !== null && fs.existsSync(applied.backupPath));
+check("apply added exactly the missing domains", applied.added.length === 2);
+
+const afterText = fs.readFileSync(guardEnv, "utf8");
+check("apply never adds a second proxy var", countProxyVars(afterText) === countProxyVars("HTTPS_PROXY=http://127.0.0.1:7890\nNO_PROXY=localhost\n"));
+check("apply kept the original proxy value", afterText.includes("HTTPS_PROXY=http://127.0.0.1:7890"));
+
+const guardAfter = guard.inspectGuard({ envPath: guardEnv, domains: guardDomains });
+check("the guard is satisfied after apply", guardAfter.covered === true, JSON.stringify(guardAfter));
+check("a second apply is a no-op", guard.applyGuard({ envPath: guardEnv, domains: guardDomains }).changed === false);
+
+guard.restoreGuard({ envPath: guardEnv });
+const restoredText = fs.readFileSync(guardEnv, "utf8");
+check("restore brings the original NO_PROXY back", restoredText.includes("NO_PROXY=localhost") && !restoredText.includes("deepseek.com"));
+check("restore leaves the proxy var alone", restoredText.includes("HTTPS_PROXY=http://127.0.0.1:7890"));
+await expectThrow("restore without a backup fails loudly", async () => guard.restoreGuard({ envPath: path.join(guardDir, "missing.env") }), /no backup/);
+
+const guardReport = asText(__internals.renderGuard({
+	action: "apply", env_path: guardEnv, exists: true, proxy_vars: ["HTTPS_PROXY"], no_proxy: "localhost,deepseek.com",
+	no_proxy_line: "NO_PROXY=localhost,deepseek.com", covered: true, missing_count: 0, protected_domain_count: 41,
+	protected_domains: [], changed: true, added_count: 82, backup_path: "x.bak", restored: false, notes: []
+}));
+check("guard report has no undefined", !guardReport.includes("undefined"), guardReport);
+check("guard report mentions the backup", guardReport.includes("backup: x.bak"));
+
+// ---------------------------------------------------------------------------
+section("client bundle and patch metadata");
+const vm = await import("node:vm");
+const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const clientSource = fs.readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
+const patchSource = fs.readFileSync(new URL("../cordis.patch.yml", import.meta.url), "utf8");
+const entryId = pkg.name.split("/").pop();
+
+const bundleId = /id:\s*'([^']+)'/.exec(clientSource);
+// Strip comments so these assertions test real code, not prose about the code.
+const clientCode = clientSource
+	.replace(/\/\*[\s\S]*?\*\//g, "")
+	.split(/\r?\n/)
+	.map((line) => line.replace(/\/\/.*$/, ""))
+	.join("\n");
+
+equal("the bundle id equals the package name", bundleId === null ? null : bundleId[1], pkg.name);
+check("cordis.patch.yml references the package name", patchSource.includes(pkg.name));
+check("cordis.patch.yml uses the matching entry id", patchSource.includes(`id: ${entryId}`));
+check("the entry id matches the host half", entryId === "dsh-downloader");
+check("the client registers a settings section", clientCode.includes("'settings.section'"));
+check("the client resolves configForms lazily", clientCode.includes("ctx.get('configForms')"));
+check("the client does not use the removed settingsScope", !clientCode.includes("settingsScope"));
+check("the client wraps scope.subscribe to keep `this`", clientCode.includes("function (listener) { return scope.subscribe(listener) }"));
+check("the client wraps scope.getSnapshot to keep `this`", clientCode.includes("function () { return scope.getSnapshot() }"));
+
+let clientCompiles = true;
+let compileError = "";
+try {
+	new vm.Script(clientSource, { filename: "lib/client.js" });
+} catch (error) {
+	clientCompiles = false;
+	compileError = error instanceof Error ? error.message : String(error);
+}
+check("the client bundle compiles as a script", clientCompiles, compileError);
+check("the patch ships with the package", Array.isArray(pkg.files) && pkg.files.includes("cordis.patch.yml"));
+check("the size data ships with the package", Array.isArray(pkg.files) && pkg.files.includes("lib"));
+
+// ---------------------------------------------------------------------------
 section("teardown");
 core.stop();
 server.closeAllConnections?.();

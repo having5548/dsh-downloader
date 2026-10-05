@@ -4,7 +4,40 @@
 
 它给模型注册一个 `dsh_download` 工具：下载文件时**自动判断目标在境内还是境外**，境外走插件自带的代理内核，境内直连，直连失败自动改用代理重试；返回保存路径、字节数、sha256、速度与所用路由。代理出口**不需要本机装 Clash** —— 填一条订阅地址即可，也可以直接指定一个 `proxyUrl`。
 
+**并且内置了国内各大 AI 平台的域名，强制直连、永不经过代理** —— 节点抖动或代理程序关掉都不会打断模型连接。
+
 ---
+
+## 🛡️ 会话保护：国内 AI 平台域名强制直连
+
+代理节点一抖，走代理的长连接就会断；而这个 Harness 自己的模型接口全都是国内服务，本来就不该走代理。
+
+**本插件做了两层保护：**
+
+### 第一层：下载路径（本插件内核，默认开启）
+
+内置了这些平台的域名，转成 `DOMAIN-SUFFIX,<域名>,DIRECT` 规则并**置于最高优先级** —— 高于订阅自带规则、高于你写的 `extraRules`，**连 `domesticDirect=false`（全部走代理）模式下也照样直连**：
+
+> DeepSeek · 智谱/Z.ai/ChatGLM · 月之暗面 Kimi · 阿里通义/DashScope · 字节豆包/火山方舟 · 百度文心/千帆 · 腾讯混元 · 讯飞星火 · MiniMax · 零一万物 · 阶跃星辰 · 商汤日日新 · 百川智能 · 硅基流动 · 昆仑万维天工 · 华为云盘古/ModelArts · 网易有道 · 澜舟 · 元象 · 面壁 · 出门问问 · 国家超算/启智
+
+完整清单见 `lib/core/ai-domains.js`（表里不存在的条目最多只是不匹配，没有副作用）。用 `extraDirectDomains` 可以继续加自己的域名或完整 URL。
+
+### 第二层：Harness 自身的模型连接（需要你点一下）
+
+**本插件是工具型，从不碰 LLM 长连接**，所以上面那层保护管不到会话本身。真正决定模型流量走哪的是 DSH 启动期的全局代理策略：`$DSH_HOME/.env` 里的 `HTTP_PROXY` / `HTTPS_PROXY`。代理程序一关，走它的连接就全断 —— 会话当场终止。
+
+用 `dsh_session_guard` 工具（或设置页里的「会话保护」卡片）修：
+
+| 动作 | 效果 |
+|---|---|
+| `check`（默认） | 只读：报告 `$DSH_HOME/.env` 里有没有代理变量、AI 域名是否已经在 `NO_PROXY` 里 |
+| `apply` | 把缺失的域名合并进 `NO_PROXY`。**写之前自动备份**；**只改 `NO_PROXY` 这一行**，绝不动 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` |
+| `restore` | 用最新备份还原 |
+
+`apply` 之后**需要重启 DSH** —— 那个文件是启动期读一次的。
+
+---
+
 
 ## ⚠️ 先读这一段：它能覆盖什么，不能覆盖什么
 
@@ -65,7 +98,9 @@ dsh plugin --profile desktop add @having5548/dsh-downloader
 | `autoUpdateHours` | `24` | 订阅自动更新间隔，`0` 关闭 |
 | `groupType` | `url-test` | `url-test` 自动最快 / `select` 手动 / `fallback` 失败切换 |
 | `preferredNode` | 空 | 按名字固定一个节点 |
-| `domesticDirect` | `true` | 关掉则所有下载都走代理 |
+| `domesticDirect` | `true` | 关掉则所有下载都走代理（AI 平台仍直连） |
+| `protectAiPlatforms` | `true` | 国内 AI 平台域名强制直连，最高优先级 |
+| `extraDirectDomains` | `[]` | 追加强制直连的域名（支持完整 URL） |
 | `extraRules` / `excludeRules` | `[]` | 追加 / 剔除规则行 |
 | `downloadDir` | 空 | 空 = `$DSH_HOME/downloads` |
 | `maxDownloadMb` | `512` | 单文件大小上限 |
@@ -85,12 +120,14 @@ dsh plugin --profile desktop add @having5548/dsh-downloader
 | `dsh_download` | 下载文件。`url` 必填；可选 `save_path` / `overwrite` / `force_route` / `max_mb` / `timeout_seconds`。返回值含 `saved_to`、`bytes`、`sha256`、`speed_bps`、`route`、`route_reason`、`fallback_used`。 |
 | `dsh_proxy_status` | 上游模式、订阅状态、节点数与延迟、选中节点、内核端口、最近错误。 |
 | `dsh_geo_check` | 判定某个 URL / 主机走直连还是代理。**优先用内置离线规则库（不发任何网络请求）**，只有规则判不出来时才做 DNS + 在线 GeoIP + ping。 |
+| `dsh_session_guard` | 检查 / 写入 / 还原 `$DSH_HOME/.env` 的 `NO_PROXY`，让模型连接绕开全局代理（见上文「会话保护」）。 |
 
 另注册一个运行时技能 **`smart-download`**：让模型在"下载互联网文件"类任务上优先用 `dsh_download`，而不是 `curl`。
 
 ### 路由语义
 
 - **判定是离线的**：内置 11 万条国内域名后缀 + 8.7K 条国内 IP 段，加上订阅自带规则与你的 `extraRules`，按 `DOMAIN` / `DOMAIN-SUFFIX` / `DOMAIN-KEYWORD` / `IP-CIDR` / `REJECT` 匹配。不发网络请求，不怕被墙。
+- **国内 AI 平台域名永远直连**：它们以最高优先级插在所有规则之前，用户规则也覆盖不掉（除非关掉 `protectAiPlatforms`）。
 - **loopback 与私有地址永不进代理**（`127.0.0.0/8`、`::1`、`.local`、内网段），即使 `force_route=proxy`。
 - 判定为 direct 时**完全不经内核**，直接连；判定为 proxy 时经本地内核 → 节点。
 - 直连失败（超时 / DNS / 连接重置）且上游可用时，**自动改用代理重试一次**，返回值里 `fallback_used: true`。
@@ -178,6 +215,7 @@ npm pack                 # 产出 tgz
 | 无实时进度条 | DSH 工具没有 MCP 那种 `report()` 进度通道；进度只体现在最终返回值的 `bytes` / `speed_bps` |
 | `hysteria2` / `reality` 需自带连接器 | 见上 |
 | 多实例共用同一数据目录 | 同一 `$DSH_HOME` 下多开 DSH 会共用订阅缓存与选中节点 |
+| 会话保护会写工作区外的文件 | 只在**显式**调 `dsh_session_guard action="apply"`（或点面板按钮）时写 `$DSH_HOME/.env`：写前自动备份、可 `restore`，且只改 `NO_PROXY` 这一行，不动任何代理变量 |
 
 ---
 

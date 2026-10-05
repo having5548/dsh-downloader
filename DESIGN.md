@@ -75,6 +75,22 @@ clash-downloader 的分流靠 `analyzeTarget()` → DNS 解析 → 调 `ip-api.c
 - **辅助判定**：仅当域名无命中且目标是字面 IP 时，才用 `cn-cidrs` 数据
 - **在线 GeoIP**：只在 `dsh_geo_check` 这个**诊断工具**里用，不参与下载路径
 
+### 2.4 会话保活：国内 AI 平台强制直连（两层）
+
+节点一抖，走代理的长连接就断；而本 Harness 用的模型接口全是国内服务，本来就不该走代理。这需要**两层**，因为工具型插件的边界决定了它管不到会话本身：
+
+**第一层 —— 下载路径（插件内核，默认开）。** `lib/core/ai-domains.js` 内置 DeepSeek / 智谱 Z.ai / Kimi / 通义 DashScope / 豆包火山方舟 / 文心千帆 / 腾讯混元 / 讯飞星火 / MiniMax / 零一万物 / 阶跃 / 商汤 / 百川 / 硅基流动 / 天工 / 华为盘古 / 有道 / 澜舟 / 元象 / 面壁 / 出门问问 / 超算 等域名，在 `#buildEngine()` 里转成 `DOMAIN-SUFFIX,<域名>,DIRECT` 并**置于 `extraRules` 最前**；`domesticDirect === false` 时也不再退化成 `{decide: () => 'proxy'}`，而是 `[...protected, 'MATCH,PROXY']`，**保证全代理模式下 AI 域名仍直连**。用户规则排在保护之后，因此覆盖不掉（除非关 `protectAiPlatforms`）。
+
+**第二层 —— Harness 自身连接（用户显式触发）。** 工具型插件**从不碰 LLM 长连接**，所以第一层保护不到会话。真正决定模型流量去向的是 DSH 启动期读的 `$DSH_HOME/.env`（T1/T2）。`lib/core/session-guard.js` 提供 `inspectGuard` / `applyGuard` / `restoreGuard`：
+
+| 动作 | 行为 |
+|---|---|
+| `check` | 只读；报告该文件是否存在、有哪些代理变量、AI 域名在 `NO_PROXY` 里的覆盖情况与缺口 |
+| `apply` | 把缺失域名合并进 `NO_PROXY`（每个域名同时写 `d` 与 `.d` 两种写法：DSH 匹配裸后缀，老版 curl/git 认前导点）。**先备份**为 `<env>.bak-<时间戳>`；**只改 `NO_PROXY` 这一行**，绝不动 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`；无变化时不写 |
+| `restore` | 用最新备份覆盖回去；没有备份就明确报错 |
+
+`upsertNoProxy()` 保留其它行与原有 EOL（CRLF/LF），重复的 `no_proxy` 键只留一个。因为启动器只在启动期读一次，`apply` 之后**必须重启 DSH**，工具输出里会带这条提醒。
+
 ---
 
 ## 3. 已核实的运行时事实（0.2.0-rc.2）
@@ -94,7 +110,7 @@ clash-downloader 的分流靠 `analyzeTarget()` → DNS 解析 → 调 `ip-api.c
 | **T9** | `@deepseek-ai/dsh-http-proxy` / `dsh-settings` / `dsh-tools` / `dsh-skill` / `schemastery` 都在 `desktop-runtime.json` 的 287 个 `sharedPackages` 里；`undici` **不在** | 依赖声明策略见 §4.2 |
 | **T10** | **当前机器没有可用代理**：`$DSH_HOME/.env` 不存在；FlClash 只有 `FlClashHelperService` 在跑（占 47890，实测不是可用 HTTP 代理，返回 500）；7890 无监听；系统代理 `ProxyEnable=0` | 开发期必须依赖自包含内核或本地测试夹具，不能指望"本机有 Clash" |
 
-### 3.1 与 DSH 内建代理的关系（重要，写进 README）
+## 3.1 与 DSH 内建代理的关系（重要，写进 README）
 
 用户如果只想要"**所有** DSH 出网（含 `web_fetch`、`curl`、`git`、`npm`、jobs、subagent）都走代理"，**不需要任何插件**，只需：
 
@@ -324,6 +340,9 @@ execute(args, exec)
 | `preferredNode` | string | `""` | ✅ | 手动指定节点名（优先级高于 `groupType`） |
 | `latencyTestUrl` | string | `http://www.gstatic.com/generate_204` | ✅ | 节点健康检查 URL |
 | `latencyTimeoutMs` | number(step 100, min 500, max 10000) | `3000` | ✅ | 单节点测速超时 |
+| `domesticDirect` | boolean | `true` | ✅ | 关掉则所有下载都走代理（AI 平台仍直连） |
+| `protectAiPlatforms` | boolean | `true` | ✅ | 国内 AI 平台域名强制直连，最高优先级（见 §2.4） |
+| `extraDirectDomains` | string[] | `[]` | ✅ | 追加强制直连的域名（支持完整 URL / `*.x.com`） |
 | `extraRules` | string[] | `[]` | ✅ | 追加规则，如 `DOMAIN-SUFFIX,example.com,DIRECT` |
 | `excludeRules` | string[] | `[]` | ✅ | 从订阅规则中剔除（子串匹配） |
 | `domesticCountries` | string[] | `["CN"]` | ✅ | 在线 GeoIP 工具用的直连国家码白名单 |
@@ -386,7 +405,21 @@ parameters:
 
 > 命名取舍：不带前缀的 `download_file` 更符合模型直觉，但全局工具名可能与其他插件撞车。这里统一加 `dsh_` 前缀；如果评审时认为可读性更重要，改成 `download_file` / `proxy_status` / `geo_check` 只需改三处字符串与 skill 文案。
 
-### 7.4 UI 呈现
+### 7.4 `dsh_session_guard`
+
+```
+name: dsh_session_guard
+description: 让模型连接在代理失能时也不中断。check 只读上报 $DSH_HOME/.env 里 NO_PROXY 对国内 AI 平台
+             域名的覆盖情况；apply 合并缺失域名（先备份，且绝不改 HTTP_PROXY / HTTPS_PROXY）；
+             restore 用最新备份还原。
+parameters:
+  action         enum check|apply|restore (default check)
+  extra_domains  string[] (optional)  本次额外强制直连的域名
+```
+
+写盘只发生在显式 `apply`。返回 `changed` / `added_count` / `backup_path`，并在 `notes` 里提醒**需要重启 DSH**、以及该文件当前没有代理变量时该项暂时无效。
+
+### 7.5 UI 呈现
 
 ```js
 presentCall: (args) => ({ card: 'generic', kind: 'fetch',

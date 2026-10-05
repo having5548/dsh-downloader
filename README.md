@@ -8,6 +8,47 @@ domestic targets direct and foreign targets through its own proxy core, then ret
 attempt through the proxy. It reports the saved path, byte count, sha256, speed, and the route used.
 The proxy exit needs **no local Clash** — one subscription URL is enough, or an explicit `proxyUrl`.
 
+**It also pins the Chinese AI platform domains to DIRECT, always outside the proxy** — a flapping node
+or a closed proxy app can never break a model connection.
+
+---
+
+## 🛡️ Session guard: Chinese AI platforms never go through a proxy
+
+A proxy node that flaps kills every long-lived connection routed through it; and every model endpoint
+this harness talks to is a domestic service that never needed a proxy. **Two layers of protection:**
+
+### Layer 1 — the download path (this plugin's core, on by default)
+
+The platform domains below become `DOMAIN-SUFFIX,<domain>,DIRECT` rules placed at **the highest priority** —
+ahead of the subscription's own rules, ahead of your `extraRules`, and **still direct when
+`domesticDirect=false` (everything-through-the-proxy mode)**:
+
+> DeepSeek · 智谱/Z.ai/ChatGLM · Moonshot Kimi · Alibaba Tongyi/DashScope · ByteDance Doubao/Volcano Ark ·
+> Baidu ERNIE/Qianfan · Tencent Hunyuan · iFlytek Spark · MiniMax · 01.AI · StepFun · SenseTime ·
+> Baichuan · SiliconFlow · Kunlun Tiangong · Huawei Cloud Pangu/ModelArts · NetEase Youdao · Langboat ·
+> XVERSE · ModelBest · Mobvoi · SCNet / OpenI
+
+The full list lives in `lib/core/ai-domains.js` (a stale entry is harmless — it just never matches).
+`extraDirectDomains` adds your own domains or full URLs.
+
+### Layer 2 — the harness's own model connections (needs one click)
+
+**This plugin is tool-type and never touches the LLM connection**, so layer 1 cannot protect the session
+itself. What decides where model traffic goes is DSH's launch-time proxy policy:
+`HTTP_PROXY` / `HTTPS_PROXY` in `$DSH_HOME/.env`. Close the proxy app and those connections die — the
+session dies with them.
+
+Fix it with the `dsh_session_guard` tool (or the "Session guard" card in Settings):
+
+| Action | Effect |
+|---|---|
+| `check` (default) | Read-only: reports whether that file sets proxy vars and whether the AI domains are already in `NO_PROXY` |
+| `apply` | Merges the missing domains into `NO_PROXY`. **Backs the file up first**, and **only ever edits that one line** — `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` are never touched |
+| `restore` | Puts the newest backup back |
+
+DSH reads that file once at launch, so **a restart is required after `apply`**.
+
 ---
 
 ## ⚠️ Read this first: what it does and does not cover
@@ -72,7 +113,9 @@ Common fields:
 | `autoUpdateHours` | `24` | subscription refresh interval; `0` disables |
 | `groupType` | `url-test` | `url-test` / `select` / `fallback` |
 | `preferredNode` | empty | pin one node by name |
-| `domesticDirect` | `true` | turn off to send everything through the proxy |
+| `domesticDirect` | `true` | turn off to send everything through the proxy (AI platforms still direct) |
+| `protectAiPlatforms` | `true` | pin the Chinese AI platform domains to direct at the highest priority |
+| `extraDirectDomains` | `[]` | extra domains to force direct (full URLs accepted) |
 | `extraRules` / `excludeRules` | `[]` | add / drop rule lines |
 | `downloadDir` | empty | empty = `$DSH_HOME/downloads` |
 | `maxDownloadMb` | `512` | per-file size limit |
@@ -92,6 +135,7 @@ Data directory: `$DSH_HOME/dsh-downloader/` (`subscription.yaml` cache, `state.j
 | `dsh_download` | Download a file. `url` required; optional `save_path` / `overwrite` / `force_route` / `max_mb` / `timeout_seconds`. Returns `saved_to`, `bytes`, `sha256`, `speed_bps`, `route`, `route_reason`, `fallback_used`. |
 | `dsh_proxy_status` | Upstream mode, subscription state, node count and latencies, selected node, core port, last error. |
 | `dsh_geo_check` | Verdict on whether a URL or host goes direct or through the proxy. **Uses the embedded offline rule tables first (zero network)**; DNS + online GeoIP + ping only when the tables cannot decide. |
+| `dsh_session_guard` | Checks / writes / restores `NO_PROXY` in `$DSH_HOME/.env` so model connections bypass the global proxy (see the session guard above). |
 
 It also registers a runtime skill, **`smart-download`**, which makes the model prefer `dsh_download`
 over `curl` for internet downloads.
@@ -101,6 +145,8 @@ over `curl` for internet downloads.
 - **The verdict is offline**: 110k domestic domain suffixes + 8.7k domestic CIDRs, plus the
   subscription's own rules and your `extraRules`, matched as `DOMAIN` / `DOMAIN-SUFFIX` /
   `DOMAIN-KEYWORD` / `IP-CIDR` / `REJECT`. No network call, so a blocked GeoIP service cannot break it.
+- **Chinese AI platform domains are always direct**: they are inserted ahead of every other rule and
+  cannot be overridden by a user rule (unless `protectAiPlatforms` is turned off).
 - **Loopback and private addresses never enter a proxy** (`127.0.0.0/8`, `::1`, `.local`, private
   ranges) — not even with `force_route=proxy`.
 - A `direct` verdict **never touches the core**; a `proxy` verdict goes through the local core → node.
@@ -199,6 +245,7 @@ stall detector, cancellation, 404, redirects, and `.part` cleanup.
 | No live progress bar | DSH tools have no MCP-style `report()` channel; progress is only in the final `bytes` / `speed_bps` |
 | `hysteria2` / `reality` need the connector | See above |
 | One data directory per `$DSH_HOME` | Multiple DSH instances share the subscription cache and node selection |
+| The session guard writes a file outside the workspace | Only when `dsh_session_guard action="apply"` (or the panel button) is called explicitly: it backs `$DSH_HOME/.env` up first, is restorable, and edits only the `NO_PROXY` line — never a proxy variable |
 
 ---
 
