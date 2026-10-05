@@ -9,6 +9,41 @@
 
 ## [未发布]
 
+## [0.2.0] - 2026-10-05
+
+### 新增
+
+- **节点导入对齐 FlClash**（参考 `example/FlClash-main` 的 `Profile` 模型与 `ProfilesAction`）。
+  FlClash 把配置存成**一份列表**，每份要么是订阅 URL、要么是导入的本地文件，各自带名字、上次更新时间与自动更新间隔；名字优先取响应头 `Content-Disposition` 的文件名，流量与到期取自 `subscription-userinfo`。本版按同一模型实现：
+  - 新增 `lib/core/profiles.js`（`ProfileStore`）：多份配置持久化在 `$DSH_HOME/dsh-downloader/profiles.json`，正文各自放在 `profiles/<id>.yaml`，元数据原子写入。
+  - 三种导入入口：订阅地址、`clash://install-config?url=…` 深链（也接受 `clash://<encoded>`）、本地文件正文。`parseImportLink()` 负责把深链还原成地址。
+  - `parseSubscriptionUserinfo()` 解析 `upload/download/total/expire`；`Content-Disposition` 起名复用 `filenameFromDisposition()`，无文件名时退回域名（`labelFromUrl()`）。
+  - 每份配置独立的自动更新开关与间隔；**本地文件配置永不自动更新**（对应 FlClash 的 `realAutoUpdate`）；到点判断用 `lastUpdateDate + autoUpdateDuration`（`dueProfiles()`），由 5 分钟一次的扫描驱动，而不是全局统一节拍。
+  - 操作：选择 / 更新 / 删除 / 改名 / 排序 / 开关自动更新。
+  - 新增工具 **`dsh_profile`**（list / add_url / add_file / update / select / remove / auto / reorder / rename），模型可以自己导入订阅。
+  - 管理面板新增「节点配置」卡片：配置列表（当前 / 本地文件 / 自动更新 / 流量与到期）、选用 / 更新 / 删除、订阅地址输入框与文件选择器。
+  - 旧的单条 `subscriptionUrl` 配置保留为**回退**：只有一份配置都没有时才走它。
+- **代理作用域收紧为「只服务 DSH 自己发起的下载」**。
+  实现为三重硬约束，并在 `dsh_proxy_status` 的 `scope` 字段与面板上如实报告：
+  - 内核只绑 `127.0.0.1`（局域网不可达）；
+  - 每次进程启动生成一个 24 字节随机令牌，HTTP 请求必须带 `Proxy-Authorization: Bearer <token>`（也接受 `Basic dsh:<token>`，方便 `curl`），否则回 `407`；
+  - 令牌握手装不下，因此**令牌模式下直接拒绝 SOCKS5**（回 `0x05 0xff`），不再对外提供第二个入口。
+  令牌不落盘、不写日志、不出现在状态 API 里。
+- `fetchSubscription()` 现在同时返回响应头（`{ text, headers, status, url, redirects }`），否则拿不到 `Content-Disposition` 与 `subscription-userinfo`。
+
+### 变更
+
+- `ProxyServer` 构造函数新增 `token` 选项与 `gated` 读取器；`lib/core/proxy-server.js` 的改动处已用 `[dsh-downloader]` 标注。
+- `upstream.js` 的 `status()` 新增 `scope` / `profiles` / `profileCount` / `currentProfile` / `activeProfileLabel`。
+- 管理面板「上游」卡片新增一句作用域说明。
+
+### 兼容
+
+- 未配置任何「节点配置」的既有安装行为不变，继续使用 `subscriptionUrl`。
+- `fetchSubscription()` 的返回值由字符串改为对象（内部 API，仅 `upstream.js` 使用）。
+
+> 测试 171 → 224 项：新增配置存储往返、深链与 userinfo 解析、文件名起名、自动更新到期判定、以及令牌鉴权的三条路径（带令牌成功 / 无令牌 407 / SOCKS5 被拒）。
+
 ## [0.1.4] - 2026-10-05
 
 ### 修复

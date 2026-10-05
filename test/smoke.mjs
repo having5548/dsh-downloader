@@ -8,6 +8,7 @@
  *   node test/smoke.mjs
  */
 import http from "node:http";
+import nodeNet from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -17,7 +18,7 @@ import { ProxyServer } from "../lib/core/proxy-server.js";
 import { parseSubscription } from "../lib/core/subscription.js";
 import { decideRoute, NoUpstreamError } from "../lib/download/route.js";
 import { attemptDownload, HttpStatusError } from "../lib/download/fetch-file.js";
-import { httpFlow, parseProxyUrl } from "../lib/download/http.js";
+import { connectTunnel, httpFlow, parseProxyUrl } from "../lib/download/http.js";
 import { filenameFromDisposition, filenameFromUrl, humanSize, isPrivateIp, pickFilename, sanitizeFilename } from "../lib/download/util.js";
 
 let passed = 0;
@@ -484,6 +485,185 @@ const guardReport = asText(__internals.renderGuard({
 check("guard report has no undefined", !guardReport.includes("undefined"), guardReport);
 check("guard report mentions the backup", guardReport.includes("备份：x.bak"));
 check("guard report localizes the action", guardReport.includes("apply（写入 NO_PROXY）"), guardReport);
+
+const profilesReport = asText(__internals.renderProfiles({
+	action: "list",
+	current_label: "机场 A",
+	profiles: [
+		{
+			id: "1", label: "机场 A", source: "url", current: true, auto_update: true, auto_update_hours: 24,
+			last_update_at: Date.now(), node_count: 12,
+			subscription_info: { upload: 1024, download: 2048, total: 107374182400, expire: 1798761600 }
+		},
+		{
+			id: "2", label: "本地.yaml", source: "file", current: false, auto_update: false, auto_update_hours: 24,
+			last_update_at: Date.now(), node_count: null, subscription_info: null
+		}
+	],
+	notes: []
+}));
+check("profiles report has no undefined", !profilesReport.includes("undefined"), profilesReport);
+check("profiles report marks the current profile", profilesReport.includes("当前"), profilesReport);
+check("profiles report explains file profiles", profilesReport.includes("本地文件不自动更新"), profilesReport);
+check("profiles report renders traffic and expiry", profilesReport.includes("已用") && profilesReport.includes("到期"), profilesReport);
+
+const emptyProfiles = asText(__internals.renderProfiles({ action: "list", profiles: [], current_label: null, notes: [] }));
+check("an empty profile list renders a hint", emptyProfiles.includes("还没有导入任何配置"), emptyProfiles);
+
+// ---------------------------------------------------------------------------
+section("FlClash 式配置导入");
+const profilesMod = await import("../lib/core/profiles.js");
+
+const userinfo = profilesMod.parseSubscriptionUserinfo("upload=1024; download=2048; total=107374182400; expire=1798761600");
+equal("userinfo upload", userinfo.upload, 1024);
+equal("userinfo total", userinfo.total, 107374182400);
+equal("userinfo expire", userinfo.expire, 1798761600);
+equal("userinfo tolerates an empty header", profilesMod.parseSubscriptionUserinfo(null).total, 0);
+equal("userinfo tolerates junk", profilesMod.parseSubscriptionUserinfo("nonsense; upload=x").upload, 0);
+
+equal("parseImportLink plain url", profilesMod.parseImportLink("https://example.com/sub?token=1"), "https://example.com/sub?token=1");
+equal(
+	"parseImportLink clash install-config",
+	profilesMod.parseImportLink("clash://install-config?url=https%3A%2F%2Fexample.com%2Fsub%3Ftoken%3D1"),
+	"https://example.com/sub?token=1"
+);
+equal(
+	"parseImportLink clash bare encoded",
+	profilesMod.parseImportLink(`clash://${encodeURIComponent("https://example.com/a.yaml")}`),
+	"https://example.com/a.yaml"
+);
+equal("parseImportLink rejects junk", profilesMod.parseImportLink("hello world"), null);
+equal("parseImportLink rejects an empty clash link", profilesMod.parseImportLink("clash://install-config"), null);
+equal("labelFromUrl uses the host", profilesMod.labelFromUrl("https://sub.example.com/x?y=1"), "sub.example.com");
+equal("labelFromUrl strips www", profilesMod.labelFromUrl("https://www.example.com/x"), "example.com");
+
+const profileYaml = [
+	"proxies:",
+	"  - {name: P1, type: ss, server: 1.2.3.4, port: 8388, cipher: aes-128-gcm, password: p}",
+	"  - {name: P2, type: trojan, server: 5.6.7.8, port: 443, password: q}",
+	"rules:",
+	"  - MATCH,PROXY"
+].join("\n");
+check("validateConfigText accepts a usable body", profilesMod.validateConfigText(profileYaml).names.length === 2);
+await expectThrow("validateConfigText rejects an empty body", async () => profilesMod.validateConfigText("   "), /配置内容为空/);
+await expectThrow("validateConfigText rejects a node-less body", async () => profilesMod.validateConfigText("proxies: []"), /没有解析到任何节点/);
+
+const profileDir = path.join(tmpRoot, "profiles");
+const store = new profilesMod.ProfileStore({ dataDir: profileDir });
+const fakeFetcher = async () => ({
+	text: profileYaml,
+	headers: {
+		"content-disposition": "attachment; filename*=UTF-8''%E6%88%91%E7%9A%84%E8%AE%A2%E9%98%85.yaml",
+		"subscription-userinfo": "upload=1; download=2; total=3; expire=4"
+	}
+});
+
+const added = await store.addFromUrl("https://example.com/sub", { fetcher: fakeFetcher });
+equal("addFromUrl takes the label from Content-Disposition", added.label, "我的订阅.yaml");
+equal("addFromUrl stores the traffic info", added.subscriptionInfo.total, 3);
+equal("addFromUrl becomes current when it is the first", store.current().id, added.id);
+check("addFromUrl wrote the body", store.body(added.id).includes("P1"));
+
+const fromFile = store.addFromFile("本地节点.yaml", profileYaml);
+equal("addFromFile labels from the file name", fromFile.label, "本地节点");
+equal("addFromFile is a file profile", fromFile.source, "file");
+equal("addFromFile does not become current", store.current().id, added.id);
+equal("list() reports two profiles", store.list().length, 2);
+check("file profiles never auto-update", store.list().find((p) => p.id === fromFile.id).dueAt === null);
+check("url profiles get a due time", typeof store.list().find((p) => p.id === added.id).dueAt === "number");
+
+await expectThrow("a file profile cannot be updated from the network", async () => store.update(fromFile.id, { fetcher: fakeFetcher }), /本地文件配置不能从网络更新/);
+
+store.select(fromFile.id);
+equal("select switches the current profile", store.current().id, fromFile.id);
+store.rename(fromFile.id, "改过的名字");
+equal("rename persists", store.get(fromFile.id).label, "改过的名字");
+equal("reorder puts the given ids first", store.reorder([added.id, fromFile.id])[0].id, added.id);
+equal("dueProfiles is empty right after an update", store.dueProfiles().length, 0);
+equal("dueProfiles finds the profile once its interval elapsed", store.dueProfiles(Date.now() + 25 * 3600 * 1000).length, 1);
+store.setAutoUpdate(added.id, false);
+equal("setAutoUpdate off removes it from the due list", store.dueProfiles(Date.now() + 25 * 3600 * 1000).length, 0);
+await expectThrow("a file profile has no auto-update", async () => store.setAutoUpdate(fromFile.id, true), /没有自动更新/);
+
+const updatedProfile = await store.update(added.id, { fetcher: fakeFetcher });
+equal("update refreshes the traffic info", updatedProfile.subscriptionInfo.total, 3);
+
+// A second store over the same directory sees the persisted state.
+const reopened = new profilesMod.ProfileStore({ dataDir: profileDir });
+equal("state survives a reopen", reopened.list().length, 2);
+equal("the current selection survives a reopen", reopened.current().id, fromFile.id);
+check("the metadata file exists", fs.existsSync(path.join(profileDir, "profiles.json")));
+
+reopened.remove(added.id);
+equal("remove drops the profile", reopened.list().length, 1);
+check("remove deletes the body", !fs.existsSync(reopened.bodyPath(added.id)));
+reopened.remove(fromFile.id);
+equal("removing the last profile clears the selection", reopened.current(), null);
+equal("removing the last profile empties the list", reopened.list().length, 0);
+
+// ---------------------------------------------------------------------------
+section("代理作用域：只服务本插件");
+const gated = new ProxyServer({
+	engine: { decide: () => "direct" },
+	resolveNode: () => null,
+	token: "test-token-123"
+});
+const gatedPort = await gated.start(0);
+check("the gated core reports itself as gated", gated.gated === true);
+
+const gatedTarget = path.join(tmpRoot, "gated.bin");
+const gatedResult = await attemptDownload({
+	url: `${ORIGIN}/payload.bin`,
+	savePath: gatedTarget,
+	proxy: { socks: false, host: "127.0.0.1", port: gatedPort, token: "test-token-123" },
+	maxBytes: 8 * 1024 * 1024
+});
+equal("a caller holding the token downloads fine", gatedResult.sha256, PAYLOAD_SHA);
+
+// Plain http goes through the absolute-form path, where a 407 is a normal response
+// rather than a connection failure.
+const refusedFlow = await httpFlow(`${ORIGIN}/payload.bin`, { proxy: { socks: false, host: "127.0.0.1", port: gatedPort } });
+equal("a plain-http caller without the token gets 407", refusedFlow.status, 407);
+await readAll(refusedFlow);
+
+const wrongFlow = await httpFlow(`${ORIGIN}/payload.bin`, { proxy: { socks: false, host: "127.0.0.1", port: gatedPort, token: "wrong" } });
+equal("a plain-http caller with a wrong token gets 407", wrongFlow.status, 407);
+await readAll(wrongFlow);
+
+// https targets use CONNECT, where the same refusal surfaces as a rejected tunnel.
+await expectThrow(
+	"a CONNECT without the token is refused",
+	async () => connectTunnel({ host: "127.0.0.1", port: gatedPort }, "127.0.0.1", 443, 3000),
+	/407/
+);
+
+// SOCKS5 cannot carry the token in its greeting, so a gated core refuses the protocol.
+const socksReply = await new Promise((resolve, reject) => {
+	const socket = nodeNet.connect({ host: "127.0.0.1", port: gatedPort });
+	const timer = setTimeout(() => {
+		socket.destroy();
+		reject(new Error("SOCKS5 greeting timed out"));
+	}, 3000);
+	socket.once("connect", () => socket.write(Buffer.from([0x05, 0x01, 0x00])));
+	socket.once("data", (chunk) => {
+		clearTimeout(timer);
+		socket.destroy();
+		resolve(chunk);
+	});
+	socket.once("error", reject);
+});
+check("a SOCKS5 caller is refused by a gated core", socksReply.length >= 2 && socksReply[0] === 0x05 && socksReply[1] === 0xff, `got ${[...socksReply].join(",")}`);
+
+check(
+	"the ungated core still serves plain callers (used by the tests above)",
+	await (async () => {
+		const flow = await httpFlow(`${ORIGIN}/payload.bin`, { proxy: CORE });
+		await readAll(flow);
+		return flow.status === 200;
+	})()
+);
+
+gated.stop();
 
 // ---------------------------------------------------------------------------
 section("client bundle and patch metadata");

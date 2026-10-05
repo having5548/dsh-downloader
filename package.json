@@ -1,6 +1,6 @@
 {
   "name": "@having5548/dsh-downloader",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "DeepSeek Harness 下载代理插件：注册 dsh_download 等工具，让模型下载境外文件时自动走插件自带的代理内核（订阅自包含，或显式 proxyUrl），境内直连；带 sha256、大小上限、停滞检测与直连失败自动回退，另附「设置 → 下载代理」管理面板。",
   "keywords": [
     "dsh",

@@ -6,10 +6,10 @@
 
 简体中文 | [English](README.en.md)
 
-![Version](https://img.shields.io/badge/version-0.1.4-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.2.0-4c7ef3?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-168%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-224%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -22,7 +22,7 @@
 |---|---|---|
 | 🌏 **境外走代理、境内直连**<br>`dsh_download` 一次调用内完成判定与下载，不用模型自己挑路线 | 📦 **代理出口自包含**<br>填一条 Clash 订阅地址即可用；ss / trojan / vless / vmess / socks5 / http，**不依赖本机 Clash** | 🛡️ **会话保活**<br>内置 22 家国内 AI 平台域名强制直连，优先级高于一切规则；另有 `dsh_session_guard` 守住 `$DSH_HOME/.env` |
 | 🧮 **离线分流判定**<br>内置 11 万条国内域名后缀 + 8.7K 条国内 IP 段，**判定不发任何网络请求**，不怕被墙 | 🔁 **失败自动回退**<br>直连失败（超时 / DNS / 连接重置）自动改用代理重试一次，结果里如实标 `fallback_used` | 🔐 **完整性可验证**<br>边下边算 sha256，返回保存路径、字节数、实时速度与所用路由 |
-| 🧯 **失败不留残骸**<br>先写 `.part` 再原子重命名；**任何失败路径都删掉半截文件**，重跑永远安全 | ⏱️ **大文件不被打断**<br>刻意不声明宿主工具超时，只受自己可配的 `downloadTimeoutS` 与停滞检测约束 | 🖥️ **设置页管理面板**<br>状态 / 订阅更新 / 节点列表 / 逐节点测速 / 选组 / 实时流量 / 全部配置项 |
+| 🧯 **失败不留残骸**<br>先写 `.part` 再原子重命名；**任何失败路径都删掉半截文件**，重跑永远安全 | ⏱️ **大文件不被打断**<br>刻意不声明宿主工具超时，只受自己可配的 `downloadTimeoutS` 与停滞检测约束 | 🖥️ **设置页管理面板**<br>状态 / 配置导入与管理 / 节点列表 / 逐节点测速 / 选组 / 实时流量 / 全部配置项 | 🗂️ **节点配置对齐 FlClash**<br>多份配置（订阅 URL / clash:// 深链 / 本地文件），各自的名字、上次更新时间与自动更新间隔 | 🔒 **只服务 DSH 自己发起的下载**<br>内核只绑回环 + 每进程随机令牌，其它程序连不上也借不走；系统代理与环境变量从未被改动 |
 
 ## ⚠️ 先读这一段：它能覆盖什么
 
@@ -53,14 +53,14 @@ NO_PROXY=localhost,127.0.0.1,::1,deepseek.com,.deepseek.com
 从 GitHub Release 安装：
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.1.4.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.2.0.tgz
 ```
 
 本地打包安装：
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.1.4.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.2.0.tgz
 ```
 
 > profile 名：新版桌面端是 `desktop`，旧版 Web 端是 `web`。
@@ -70,14 +70,37 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.1.4.tgz
 ## 🚀 快速开始
 
 1. 打开 **设置 → 下载代理**。
-2. 上游二选一：
-   - **自包含（推荐）**：填 `subscriptionUrl`（Clash 订阅地址）→ 点「更新订阅」→ 节点列表出现 → 点「全部测速」挑个快的。
-   - **走已有代理**：填 `proxyUrl`，如 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:1080`。
-3. 让模型下载一个境外文件，例如：
+2. 在**「节点配置」**卡片里导入节点 —— 对齐 FlClash 的三种方式：
+   - **从订阅地址导入**：粘贴 `https://…`，或直接粘 FlClash / Clash Verge 那种 `clash://install-config?url=…` 深链（会自动取出里面的地址）。
+   - **从文件导入**：选一个本地 `.yaml` / `.yml` 配置文件。
+   - **名称留空**时按 FlClash 的规则自动取名：先取响应头 `Content-Disposition` 里的文件名，再退回域名。
+   每份配置独立保存，带自己的**上次更新时间**与**自动更新开关/间隔**（默认 24 小时；本地文件配置不自动更新，与 FlClash 一致）。
+3. 点「选用」切换当前配置、「更新」重新拉取、「删除」移除。
+4. 也可以完全不动手，直接让模型用 `dsh_profile` 工具导入，例如：
+
+   > 把这个订阅导入：https://example.com/api/v1/client/subscribe?token=xxx
+
+5. 让模型下载一个境外文件，例如：
 
    > 下载 https://github.com/X/Y/releases/latest/download/app.zip 到 D:\dl
 
-4. 结果里看 `route`：`proxy` = 走了节点，`direct` = 境内直连，`fallback_used: true` = 直连失败后回退到代理。
+6. 结果里看 `route`：`proxy` = 走了节点，`direct` = 境内直连，`fallback_used: true` = 直连失败后回退到代理。
+
+> 旧版的单条 `subscriptionUrl` 配置依然可用：只有在**没有任何配置**时才会走它；一旦导入过配置，就以选中的那份为准。
+
+## 🔒 代理作用域：只服务 DSH 自己发起的下载
+
+代理**只**服务本插件发起的下载请求。这不是靠约定，而是三重硬约束：
+
+| 约束 | 效果 |
+|---|---|
+| **只绑 `127.0.0.1`** | 局域网内其它机器根本连不上这个监听 |
+| **每进程随机令牌** | 与下载客户端在进程内一起生成，从不落盘、从不写日志。没有令牌的连接一律 `407`；SOCKS5 因为握手带不了令牌，直接被拒 |
+| **不碰系统代理、不写环境变量** | 浏览器、其它 App、以及 DSH 里非本插件的出网请求，全部保持原样 |
+
+`dsh_proxy_status` 的返回里有 `scope` 字段如实报告这三条；面板的「上游」卡片也会写出来。
+
+**换句话说**：就算这个端口被人扫到，他也用不了；而除 `dsh_download` 以外的任何流量，从来没有经过这个插件。
 
 ## 🛡️ 会话保护：国内 AI 平台强制直连
 
@@ -122,9 +145,9 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.1.4.tgz
 |---|---|---|
 | `enabled` | `true` | 总开关 |
 | `proxyUrl` | 空 | 显式上游 |
-| `subscriptionUrl` | 空 | Clash 订阅地址（自包含内核从这里取节点） |
+| `subscriptionUrl` | 空 | 旧版的单条 Clash 订阅地址；**只在没有任何「节点配置」时生效** |
 | `fetchProxyUrl` | 空 | 只用于抓订阅本身（订阅被墙时填，必须是 `http(s)://`） |
-| `autoUpdateHours` | `24` | 订阅自动更新间隔，`0` 关闭 |
+| `autoUpdateHours` | `24` | 旧版单条订阅的自动更新间隔，也是新导入配置的默认间隔；`0` 关闭 |
 | `groupType` | `url-test` | `url-test` 自动最快 / `select` 手动 / `fallback` 失败切换 |
 | `preferredNode` | 空 | 按名字固定一个节点 |
 | `latencyTestUrl` / `latencyTimeoutMs` | gstatic 204 / `3000` | 节点健康检查 URL 与超时 |
@@ -140,7 +163,7 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.1.4.tgz
 | `allowOutsideWorkspace` | `false` | 允许 `save_path` 写到工作区与下载目录之外 |
 | `maxRedirects` | `10` | 重定向上限 |
 
-数据目录：`$DSH_HOME/dsh-downloader/`（订阅缓存 `subscription.yaml`、选中节点 `state.json`）。
+数据目录：`$DSH_HOME/dsh-downloader/` —— `profiles.json`（配置清单）+ `profiles/<id>.yaml`（每份配置正文），以及旧版单条订阅的 `subscription.yaml` 缓存与选中节点的 `state.json`。
 
 ## 🧰 工具
 
@@ -150,6 +173,7 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.1.4.tgz
 | `dsh_proxy_status` | 上游模式、订阅状态、节点数与延迟、选中节点、内核端口、AI 保护状态、会话守卫状态、最近错误。 |
 | `dsh_geo_check` | 判定某个 URL / 主机走直连还是代理。**优先用内置离线规则库（不发任何网络请求）**，只有规则判不出来时才做 DNS + 在线 GeoIP + ping。 |
 | `dsh_session_guard` | 检查 / 写入 / 还原 `$DSH_HOME/.env` 的 `NO_PROXY`（见上文「会话保护」）。 |
+| `dsh_profile` | 管理节点配置（FlClash 式）：列出 / 从订阅地址或 `clash://` 深链导入 / 从配置正文导入 / 更新 / 选择 / 删除 / 开关自动更新 / 排序 / 改名。 |
 
 另注册一个运行时技能 **`smart-download`**：让模型在"下载互联网文件"类任务上优先用 `dsh_download`，而不是 `curl`。
 
@@ -213,12 +237,12 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.1.4.tgz
 
 ```bash
 npm install
-node test/smoke.mjs      # 168 项：规则引擎 / 订阅解析 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫
+node test/smoke.mjs      # 224 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
 node --check lib/client.js
 npm pack
 ```
 
-`test/smoke.mjs` **不需要外网**：它起一个本地 HTTP 夹具服务器，并让下载真正穿过插件自己的 `ProxyServer`，逐字节校验 sha256，同时覆盖大小上限、停滞检测、取消、404、重定向、`.part` 清理，以及"AI 域名在最严格规则下仍直连"与"apply 绝不新增代理变量"这类断言。
+`test/smoke.mjs` **不需要外网**：它起一个本地 HTTP 夹具服务器，并让下载真正穿过插件自己的 `ProxyServer`，逐字节校验 sha256，同时覆盖大小上限、停滞检测、取消、404、重定向、`.part` 清理，以及"AI 域名在最严格规则下仍直连""没有令牌的连接被拒 407""apply 绝不新增代理变量"这类断言。
 
 ## ⚠️ 已知限制
 
@@ -229,7 +253,8 @@ npm pack
 | 缺省文件名按 URL 推断 | `Content-Disposition` 只在返回值里可见；需要精确命名时显式给 `save_path` |
 | 无实时进度条 | DSH 工具没有 MCP 那种 `report()` 进度通道；进度只体现在最终返回值的 `bytes` / `speed_bps` |
 | `hysteria2` / `reality` 需自带连接器 | 见上 |
-| 多实例共用同一数据目录 | 同一 `$DSH_HOME` 下多开 DSH 会共用订阅缓存与选中节点 |
+| 多实例共用同一数据目录 | 同一 `$DSH_HOME` 下多开 DSH 会共用配置清单、订阅缓存与选中节点 |
+| 令牌模式下不接受 SOCKS5 入站 | SOCKS5 握手装不下令牌，所以该协议被直接拒绝；本插件自身走 HTTP CONNECT，不受影响 |
 | 会话保护会写工作区外的文件 | 只在**显式**调 `dsh_session_guard action="apply"`（或点面板按钮）时写 `$DSH_HOME/.env`：写前自动备份、可 `restore`，且只改 `NO_PROXY` 这一行 |
 
 ## 📄 License
