@@ -9,6 +9,36 @@
 
 ## [未发布]
 
+## [0.5.2] - 2026-10-10
+
+两处都是把 `dsh_run_proxied` 真正用起来时才暴露的：`git push` 打插件内核**必定**失败。
+
+### 修复
+
+- **内核的 407 挑战写成了 `Bearer`，客户端无法应答**。
+  现象：`git push` 报 `CONNECT tunnel failed, response 407`；`GIT_CURL_VERBOSE=1` 显示 git 发的 CONNECT
+  里**根本没有 `Proxy-Authorization`**，而我们的应答是 `Proxy-Authenticate: Bearer realm="dsh-downloader"`。
+  根因：内核两种凭据都接受（`Bearer <令牌>` 与 `Basic dsh:<令牌>`），但挑战只宣告了 `Bearer` ——
+  **curl 拿到自己满足不了的方案会直接放弃重试**；而 git 连预发 `Proxy-Authorization` 都不做
+  （只有 curl 会预发），于是必然吃 407。
+  修法：挑战改成 `Proxy-Authenticate: Basic realm="dsh-downloader"`。两种凭据照旧都接受，
+  只是宣告了客户端普遍能应答的那一种。
+- **`dsh_run_proxied` 没有为 git 单独配好代理**。
+  现象：即便 407 问题解决了，用户仍要手写 `git -c http.proxy=… -c http.proxyAuthMethod=basic` 才通。
+  根因：git 不吃"URL 里带凭据的环境变量"这一套 —— 它不会把凭据预发给 libcurl。
+  修法：`buildShellPrefix()` 额外通过 `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`
+  注入 `http.proxy`（带凭据的同一个 URL）与 `http.proxyAuthMethod=basic`。对非 git 命令完全无副作用，
+  因此不做命令嗅探。bash 与 pwsh 两种前缀都注入。
+
+### 说明
+
+这两条修好之后，"走代理"这条路才是通的；但**节点本身会整段时间性失效**（实测连 `upload.wikimedia.org`
+都连不上），那种情况下要改用直连，或者换个订阅。另外本机 `github.com` 的解析里混过污染 IP
+（`8.8.8.8` 作为次级 DNS 的应答），**直连可用时不要绕代理**。
+
+> 测试 360 → 366 项：新增「未带凭据的 CONNECT 收 407」「407 挑战宣告的是 Basic 而非 Bearer」
+> 以及 pwsh / bash 两种前缀里的 `http.proxy`、`http.proxyAuthMethod`、`GIT_CONFIG_COUNT` 断言。
+
 ## [0.5.1] - 2026-10-05
 
 ### 新增

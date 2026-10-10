@@ -6,10 +6,10 @@
 
 [简体中文](README.md) | English
 
-![Version](https://img.shields.io/badge/version-0.5.1-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.2-4c7ef3?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-360%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-366%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -53,14 +53,14 @@ The two can be used together; they do not interfere. This plugin **never mutates
 From the GitHub release:
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.1.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.2.tgz
 ```
 
 Or build and install locally:
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.5.1.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.5.2.tgz
 ```
 
 > Profile name: the current Electron desktop app uses `desktop`; the older web CLI used `web`.
@@ -184,6 +184,15 @@ When a shell command looks like a foreign download without a proxy (`git clone|f
 Not denied: a command that already carries a proxy (`HTTP_PROXY`, `curl -x`, `git -c http.proxy`); loopback/private targets; when the core has no usable exit (blocking with no alternative is worse than not blocking); and SSH remotes (`git@github.com:…` is not HTTP, so a proxy environment variable cannot help it).
 
 Turn it off in settings if it gets in the way.
+
+**`git` gets two extra config entries**: besides the `*_PROXY` variables, `dsh_run_proxied` feeds git
+`http.proxy` (with credentials) and `http.proxyAuthMethod=basic` through `GIT_CONFIG_COUNT`. The reason is that
+**git does not send `Proxy-Authorization` preemptively the way curl does** — with environment variables alone it
+gets a `407`. Both entries are harmless to non-git commands, so no command sniffing is involved.
+
+The core's `407` challenge says **`Basic`** (both are accepted: `Bearer <token>` and `Basic dsh:<token>`, but only
+Basic is a scheme every client can answer). With `Bearer`, curl/git see a scheme they cannot satisfy and give up
+without retrying.
 
 **For a plain file download, prefer `dsh_download`** — it brings sha256, the size cap, the stall detector and fallback. `dsh_run_proxied` exists for cases where git/curl itself is required (cloning a repository, calling an API).
 
@@ -342,7 +351,7 @@ The core (rule engine, CN data, loopback mixed proxy, node transports, subscript
 
 ```bash
 npm install
-node test/smoke.mjs      # 360 checks: rules / subscriptions / profile import / routing / HTTP client / end-to-end / session guard / token gate
+node test/smoke.mjs      # 366 checks: rules / subscriptions / profile import / routing / HTTP client / end-to-end / session guard / token gate
 node --check lib/client.js
 npm pack
 ```

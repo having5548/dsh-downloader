@@ -6,10 +6,10 @@
 
 简体中文 | [English](README.en.md)
 
-![Version](https://img.shields.io/badge/version-0.5.1-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.2-4c7ef3?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-360%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-366%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -53,14 +53,14 @@ NO_PROXY=localhost,127.0.0.1,::1,deepseek.com,.deepseek.com
 从 GitHub Release 安装：
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.1.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.2.tgz
 ```
 
 本地打包安装：
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.5.1.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.5.2.tgz
 ```
 
 > profile 名：新版桌面端是 `desktop`，旧版 Web 端是 `web`。
@@ -191,6 +191,13 @@ dsh_run_proxied({ command: "git clone https://github.com/x/y.git" })
 内核没有可用出口（拦下来却没有替代方案比不拦更糟）；SSH 形式（`git@github.com:…` 不走 HTTP，代理环境变量对它无效）。
 
 嫌它碍事可以在设置里关掉。
+
+**`git` 会被单独多喂两条配置**：`dsh_run_proxied` 除了注入 `*_PROXY` 环境变量，还会通过 `GIT_CONFIG_COUNT`
+把 `http.proxy`（带凭据）与 `http.proxyAuthMethod=basic` 塞给 git。原因是 **git 不像 curl 那样预发
+`Proxy-Authorization`** —— 只给环境变量的话它会吃 `407`。这两条对非 git 命令完全无害，所以不做命令嗅探。
+
+内核的 `407` 挑战写的是 **`Basic`**（我们两种都接受：`Bearer <令牌>` 与 `Basic dsh:<令牌>`，
+但只有 Basic 是客户端普遍能应答的方案）。写 `Bearer` 时 curl/git 拿到不认识的方案会直接放弃重试。
 
 **只是要下一个文件时，优先 `dsh_download`** —— 它带 sha256、大小上限、停滞检测与失败回退。
 `dsh_run_proxied` 是给"必须用 git/curl 本身"的场景（克隆仓库、调用 API）准备的。
@@ -349,7 +356,7 @@ dsh_run_proxied({ command: "git clone https://github.com/x/y.git" })
 
 ```bash
 npm install
-node test/smoke.mjs      # 360 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
+node test/smoke.mjs      # 366 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
 node --check lib/client.js
 npm pack
 ```

@@ -903,6 +903,19 @@ const socksReply = await new Promise((resolve, reject) => {
 });
 check("a SOCKS5 caller is refused by a gated core", socksReply.length >= 2 && socksReply[0] === 0x05 && socksReply[1] === 0xff, `got ${[...socksReply].join(",")}`);
 
+// 回归：407 的挑战方案必须是 Basic。写 Bearer 时 curl/git 拿到不认识的方案会直接放弃重试，
+// 而 git 连预发 Proxy-Authorization 都不做，于是必然吃 407（实测踩过）。
+const challenge = await new Promise((resolve, reject) => {
+	const socket = nodeNet.connect({ host: "127.0.0.1", port: gatedPort });
+	let buffer = "";
+	const timer = setTimeout(() => { socket.destroy(); resolve(buffer); }, 5000);
+	socket.once("connect", () => socket.write("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"));
+	socket.on("data", (chunk) => { buffer += chunk.toString("latin1"); clearTimeout(timer); socket.destroy(); resolve(buffer); });
+	socket.once("error", (error) => { clearTimeout(timer); reject(error); });
+});
+check("an unauthenticated CONNECT gets 407", /^HTTP\/1\.1 407 /.test(challenge), challenge.slice(0, 60));
+check("the 407 challenge advertises Basic, not Bearer", /^Proxy-Authenticate: Basic /mi.test(challenge) && !/Bearer/i.test(challenge), challenge);
+
 check(
 	"the ungated core still serves plain callers (used by the tests above)",
 	await (async () => {
@@ -950,6 +963,11 @@ check("the pwsh prefix assigns $env vars", pwshPrefix.includes("$env:HTTP_PROXY=
 check("the pwsh prefix also sets lowercase names", pwshPrefix.includes("$env:https_proxy=") && pwshPrefix.includes("$env:no_proxy='localhost,deepseek.com';"));
 const bashPrefix = shellProxy.buildShellPrefix({ shell: "bash", proxyUrl: "p", noProxy: "n" });
 check("the bash prefix uses export", bashPrefix.includes("export HTTP_PROXY='p';"), bashPrefix);
+// 回归：git 不会预发 Proxy-Authorization，必须靠 GIT_CONFIG_* 把带凭据的代理与认证方式喂给它。
+check("the pwsh prefix configures git's proxy", pwshPrefix.includes("$env:GIT_CONFIG_KEY_0='http.proxy';") && pwshPrefix.includes("$env:GIT_CONFIG_VALUE_0='http://dsh:t@127.0.0.1:9';"), pwshPrefix);
+check("the pwsh prefix tells git to use basic proxy auth", pwshPrefix.includes("$env:GIT_CONFIG_KEY_1='http.proxyAuthMethod';") && pwshPrefix.includes("$env:GIT_CONFIG_VALUE_1='basic';"));
+check("the pwsh prefix declares the git config count", pwshPrefix.includes("$env:GIT_CONFIG_COUNT='2';"));
+check("the bash prefix configures git too", bashPrefix.includes("export GIT_CONFIG_KEY_0='http.proxy';") && bashPrefix.includes("export GIT_CONFIG_VALUE_1='basic';"), bashPrefix);
 equal("buildProxyUrl carries the token", shellProxy.buildProxyUrl({ port: 1234, token: "abc" }), "http://dsh:abc@127.0.0.1:1234");
 check("the explanation names the foreign host", shellProxy.explainShellRouting({ foreign: [{ url: "u", host: "github.com" }] }).includes("github.com"));
 
