@@ -127,6 +127,44 @@ const server = http.createServer((req, res) => {
 			res.writeHead(302, { location: "/payload.bin" });
 			res.end();
 			return;
+		case "/echo-auth":
+			res.writeHead(200, { "content-type": "text/plain" });
+			res.end(`auth=${req.headers.authorization ?? "none"} keep=${req.headers["x-keep"] ?? "none"}`);
+			return;
+		case "/auth-same-redirect":
+			res.writeHead(302, { location: "/echo-auth" });
+			res.end();
+			return;
+		case "/auth-cross-redirect":
+			res.writeHead(302, { location: `${AUTH_PROBE_ORIGIN}/echo-auth` });
+			res.end();
+			return;
+		case "/needs-auth": {
+			if ((req.headers.authorization ?? "") !== "Bearer test-token") {
+				res.writeHead(401, { "content-type": "text/plain" });
+				res.end("unauthorized");
+				return;
+			}
+			// 鉴权 + 支持 Range，用来验证分片请求也会带上凭据头。
+			const slice = fixtureSlice(req, BIG_PAYLOAD.length);
+			if (slice === null) {
+				res.writeHead(200, {
+					"content-type": "application/octet-stream",
+					"content-length": String(BIG_PAYLOAD.length),
+					"accept-ranges": "bytes"
+				});
+				res.end(BIG_PAYLOAD);
+				return;
+			}
+			res.writeHead(206, {
+				"content-type": "application/octet-stream",
+				"content-length": String(slice.end - slice.start + 1),
+				"content-range": `bytes ${slice.start}-${slice.end}/${BIG_PAYLOAD.length}`,
+				"accept-ranges": "bytes"
+			});
+			res.end(BIG_PAYLOAD.subarray(slice.start, slice.end + 1));
+			return;
+		}
 		case "/redirect-loop":
 			res.writeHead(302, { location: "/redirect-loop" });
 			res.end();
@@ -167,6 +205,14 @@ const server = http.createServer((req, res) => {
 
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const ORIGIN = `http://127.0.0.1:${server.address().port}`;
+
+// 第二台服务器：只用来验证跨域重定向会不会把凭据头带过去（host:port 不同即算跨域）。
+const authProbe = http.createServer((req, res) => {
+	res.writeHead(200, { "content-type": "text/plain" });
+	res.end(`auth=${req.headers.authorization ?? "none"} keep=${req.headers["x-keep"] ?? "none"}`);
+});
+await new Promise((resolve) => authProbe.listen(0, "127.0.0.1", resolve));
+const AUTH_PROBE_ORIGIN = `http://127.0.0.1:${authProbe.address().port}`;
 
 const core = new ProxyServer({ engine: { decide: () => "direct" }, resolveNode: () => null });
 const corePort = await core.start(0);
@@ -928,6 +974,67 @@ check("the dry-run report shows the command", proxiedDryRun.includes("git clone 
 check("the dry-run report has no undefined", !proxiedDryRun.includes("undefined"), proxiedDryRun);
 
 // ---------------------------------------------------------------------------
+section("下载鉴权（headers / auth）");
+const authMod = await import("../lib/download/auth.js");
+
+equal("sanitizeHeaders drops Host", Object.keys(authMod.sanitizeHeaders({ Host: "x", "X-A": "1" })).join(","), "X-A");
+check("sanitizeHeaders drops Content-Length", authMod.sanitizeHeaders({ "Content-Length": "5" })["Content-Length"] === undefined);
+check("sanitizeHeaders drops Proxy-Authorization", authMod.sanitizeHeaders({ "Proxy-Authorization": "x" })["Proxy-Authorization"] === undefined);
+check("sanitizeHeaders tolerates null and junk", Object.keys(authMod.sanitizeHeaders(null)).length === 0 && Object.keys(authMod.sanitizeHeaders("nope")).length === 0);
+equal("sanitizeHeaders stringifies numbers", authMod.sanitizeHeaders({ "X-N": 5 })["X-N"], "5");
+
+check("hasSensitiveHeaders spots Authorization", authMod.hasSensitiveHeaders({ authorization: "x" }) === true);
+check("hasSensitiveHeaders spots Cookie", authMod.hasSensitiveHeaders({ Cookie: "x" }) === true);
+check("hasSensitiveHeaders ignores ordinary headers", authMod.hasSensitiveHeaders({ "X-A": "1" }) === false);
+check("stripSensitiveHeaders removes them", Object.keys(authMod.stripSensitiveHeaders({ Cookie: "a", Authorization: "b", "X-A": "1" })).join(","), "X-A");
+
+const noAuth = await authMod.resolveAuth(undefined);
+check("no auth yields no headers", Object.keys(noAuth.headers).length === 0 && noAuth.source === null);
+process.env.DSH_TEST_TOKEN = "abc123";
+const viaEnv = await authMod.resolveAuth("env:DSH_TEST_TOKEN");
+equal("env: becomes a Bearer header", viaEnv.headers.Authorization, "Bearer abc123");
+await expectThrow("env: with a missing variable fails", async () => authMod.resolveAuth("env:DSH_NOT_SET_ANYWHERE"), /没有值/);
+await expectThrow("env: without a name fails", async () => authMod.resolveAuth("env:"), /变量名/);
+const literalAuth = await authMod.resolveAuth("bearer:xyz");
+equal("bearer: becomes a header", literalAuth.headers.Authorization, "Bearer xyz");
+check("bearer: carries a warning about the session log", typeof literalAuth.warning === "string" && literalAuth.warning.includes("会话记录"));
+await expectThrow("an unknown auth reference is rejected", async () => authMod.resolveAuth("token:xyz"), /无法识别的 auth/);
+delete process.env.DSH_TEST_TOKEN;
+
+// 端到端：夹具的 /needs-auth 要求 `Bearer test-token`。
+const authTarget = path.join(tmpRoot, "auth", "ok.bin");
+const authed = await attemptDownload({
+	url: `${ORIGIN}/needs-auth`,
+	savePath: authTarget,
+	headers: { Authorization: "Bearer test-token" },
+	maxBytes: 64 * 1024 * 1024
+});
+equal("an authenticated download succeeds", authed.sha256, BIG_SHA);
+await expectThrow(
+	"without the header it is 401",
+	async () => attemptDownload({ url: `${ORIGIN}/needs-auth`, savePath: path.join(tmpRoot, "auth", "no.bin"), maxBytes: 64 * 1024 * 1024 }),
+	/401/
+);
+
+// 分片请求也必须带上凭据头，否则每一条 Range 都会被拒。
+const authThreaded = await attemptDownload({
+	url: `${ORIGIN}/needs-auth`,
+	savePath: path.join(tmpRoot, "auth", "threaded.bin"),
+	headers: { Authorization: "Bearer test-token" },
+	threads: 4,
+	maxBytes: 64 * 1024 * 1024
+});
+check("the segmented path keeps the auth header", authThreaded.sha256 === BIG_SHA && authThreaded.viaThreads === true, JSON.stringify({ sha: authThreaded.sha256 === BIG_SHA, threads: authThreaded.viaThreads }));
+
+// 重定向：同域保留凭据头，跨域必须丢掉（别把 token 交给第三方主机）。
+const sameHop = await httpFlow(`${ORIGIN}/auth-same-redirect`, { headers: { Authorization: "Bearer keepme" } });
+equal("a same-host redirect keeps the token", (await readAll(sameHop)).toString("utf8").trim(), "auth=Bearer keepme keep=none");
+const crossHop = await httpFlow(`${ORIGIN}/auth-cross-redirect`, { headers: { Authorization: "Bearer keepme", "X-Keep": "yes" } });
+const crossBody = (await readAll(crossHop)).toString("utf8").trim();
+check("a cross-host redirect drops the token", crossBody.startsWith("auth=none"), crossBody);
+check("a cross-host redirect keeps ordinary headers", crossBody.includes("keep=yes"), crossBody);
+
+// ---------------------------------------------------------------------------
 section("client bundle and patch metadata");
 const vm = await import("node:vm");
 const pkg = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"));
@@ -969,7 +1076,9 @@ check("the size data ships with the package", Array.isArray(pkg.files) && pkg.fi
 section("teardown");
 core.stop();
 server.closeAllConnections?.();
+authProbe.closeAllConnections?.();
 await new Promise((resolve) => server.close(() => resolve()));
+await new Promise((resolve) => authProbe.close(() => resolve()));
 check("core port released", await new Promise((resolve) => {
 	const probe = http.request({ host: "127.0.0.1", port: corePort, path: "/", method: "GET" }, () => resolve(false));
 	probe.once("error", () => resolve(true));

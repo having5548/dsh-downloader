@@ -6,10 +6,10 @@
 
 简体中文 | [English](README.en.md)
 
-![Version](https://img.shields.io/badge/version-0.5.0-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.1-4c7ef3?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-338%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-360%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -53,14 +53,14 @@ NO_PROXY=localhost,127.0.0.1,::1,deepseek.com,.deepseek.com
 从 GitHub Release 安装：
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.0.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.1.tgz
 ```
 
 本地打包安装：
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.5.0.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.5.1.tgz
 ```
 
 > profile 名：新版桌面端是 `desktop`，旧版 Web 端是 `web`。
@@ -87,6 +87,32 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.5.0.tgz
 6. 结果里看 `route`：`proxy` = 走了节点，`direct` = 境内直连，`fallback_used: true` = 直连失败后回退到代理。
 
 > 旧版的单条 `subscriptionUrl` 配置依然可用：只有在**没有任何配置**时才会走它；一旦导入过配置，就以选中的那份为准。
+
+## 🔑 需要鉴权的下载（GitHub Actions 产物等）
+
+`dsh_download` 支持带凭据下载，但**只接受「引用」，不接受明文 token** —— 因为工具参数会永久留在会话记录里：
+
+```
+dsh_download({ url: "<archive_download_url>", save_path: "...", auth: "gh" })
+```
+
+| `auth` 取值 | 含义 |
+| --- | --- |
+| `gh` | 插件自己跑 `gh auth token --hostname github.com`，从 GitHub CLI 的凭据库取。**推荐** |
+| `env:变量名` | 读环境变量，例如 `auth: "env:GH_TOKEN"` |
+| `bearer:token` | 直接给字面量。方便，但 token 会进会话记录 —— 只用在非敏感场景 |
+
+`headers` 参数可以附加任意请求头（键值都是字符串）：
+
+```
+dsh_download({ url: "...", save_path: "...", headers: { "X-Api-Key": "..." } })
+```
+
+`Host` / `Content-Length` / `Connection` / `Transfer-Encoding` / `Proxy-Authorization` 这类会破坏请求的头会被**静默忽略**，不会把下载搞坏。
+
+**跨域重定向会丢掉凭据（这一点是故意的）**：GitHub 的 `archive_download_url` 会 302 到 blob 域，把 `Authorization` 带过去既没用、又等于把 token 交给第三方主机，某些情况下还会被对端 400 拒绝。所以跳转到**不同主机**时会自动剥掉 `Authorization` / `Cookie`；同主机跳转则保留。
+
+凭据会应用到**每一条**请求 —— 初次探测、每一个分片 Range 请求、以及回退后的单连接重试，都一样。
 
 ## ⚡ 多线程下载
 
@@ -323,7 +349,7 @@ dsh_run_proxied({ command: "git clone https://github.com/x/y.git" })
 
 ```bash
 npm install
-node test/smoke.mjs      # 338 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
+node test/smoke.mjs      # 360 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
 node --check lib/client.js
 npm pack
 ```

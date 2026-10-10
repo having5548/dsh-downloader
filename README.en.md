@@ -6,10 +6,10 @@
 
 [简体中文](README.md) | English
 
-![Version](https://img.shields.io/badge/version-0.5.0-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.1-4c7ef3?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-338%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-360%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -53,14 +53,14 @@ The two can be used together; they do not interfere. This plugin **never mutates
 From the GitHub release:
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.0.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.1.tgz
 ```
 
 Or build and install locally:
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.5.0.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.5.1.tgz
 ```
 
 > Profile name: the current Electron desktop app uses `desktop`; the older web CLI used `web`.
@@ -88,6 +88,31 @@ Then open **Settings → Download proxy**.
 
 > The legacy single `subscriptionUrl` field still works: it is consulted only when **no profile exists**. As soon as you import one, the selected profile wins.
 
+## 🔑 Authenticated downloads (GitHub Actions artifacts and friends)
+
+`dsh_download` can carry credentials, but it only accepts a **reference**, never a literal token — tool arguments stay in the session log forever:
+
+```
+dsh_download({ url: "<archive_download_url>", save_path: "...", auth: "gh" })
+```
+
+| `auth` value | Meaning |
+| --- | --- |
+| `gh` | The plugin runs `gh auth token --hostname github.com` itself and reads GitHub CLI's own credential store. **Recommended** |
+| `env:NAME` | Read an environment variable, e.g. `auth: "env:GH_TOKEN"` |
+| `bearer:token` | A literal token — convenient, but it lands in the session log; use only for non-sensitive cases |
+
+`headers` adds arbitrary request headers (string keys and values):
+
+```
+dsh_download({ url: "...", save_path: "...", headers: { "X-Api-Key": "..." } })
+```
+
+Headers that would break the request (`Host`, `Content-Length`, `Connection`, `Transfer-Encoding`, `Proxy-Authorization`) are **silently ignored** rather than allowed to corrupt the download.
+
+**Credentials are dropped on a cross-host redirect, on purpose**: GitHub's `archive_download_url` 302s to a blob host, where the `Authorization` header is useless, hands your token to a third party, and is sometimes answered with a 400. So `Authorization` / `Cookie` are stripped when the redirect changes host, and kept when it does not.
+
+Credentials apply to **every** request: the initial probe, each segmented Range request, and the single-stream retry after a fallback.
 ## ⚡ Multi-threaded downloads
 
 When the server supports `Range`, a large file is split across `threads` (4 by default) connections.
@@ -317,7 +342,7 @@ The core (rule engine, CN data, loopback mixed proxy, node transports, subscript
 
 ```bash
 npm install
-node test/smoke.mjs      # 338 checks: rules / subscriptions / profile import / routing / HTTP client / end-to-end / session guard / token gate
+node test/smoke.mjs      # 360 checks: rules / subscriptions / profile import / routing / HTTP client / end-to-end / session guard / token gate
 node --check lib/client.js
 npm pack
 ```

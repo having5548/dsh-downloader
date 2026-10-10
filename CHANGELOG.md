@@ -9,6 +9,36 @@
 
 ## [未发布]
 
+## [0.5.1] - 2026-10-05
+
+### 新增
+
+- **`dsh_download` 支持带鉴权的下载**（GitHub Actions 产物、私有 Release、内部制品库等）。新增两个参数：
+  - **`auth`（推荐）** —— 只接受**引用**，token 由插件自己去取，**不进会话记录**：
+    - `gh` → 跑 `gh auth token --hostname github.com`，从 GitHub CLI 凭据库读；
+    - `env:变量名` → 读环境变量；
+    - `bearer:token` → 字面量（会进会话记录，返回值里会带一条提醒）。
+  - **`headers`** —— 附加任意请求头；`Host` / `Content-Length` / `Connection` / `Transfer-Encoding` /
+    `Proxy-Authorization` / `Proxy-Connection` / `Upgrade` 会被静默忽略，避免调用方把请求弄坏。
+- 新增 `lib/download/auth.js`：`resolveAuth()` / `sanitizeHeaders()` / `hasSensitiveHeaders()` / `stripSensitiveHeaders()`。
+
+### 变更
+
+- **跨主机重定向会剥掉 `Authorization` / `Cookie`**。GitHub 的 `archive_download_url` 会 302 到 blob 域，
+  把凭据带过去既没用、又等于把 token 交给第三方主机，某些情况下还会被对端 400 拒绝。同主机跳转保持原样。
+- 凭据贯穿**每一条**请求：初次探测、`downloadSegmented` 的每一个 Range 分片、以及回退后的
+  `attemptSingleStream` 重试。
+
+### 修复
+
+- **分片请求漏传 `headers`**（写这一版时自己踩的）：`trySegmented()` 组装 `downloadSegmented()` 的参数时没带
+  `headers`，于是带鉴权的分片下载每一条 Range 都被服务端回 401 → 触发回退单连接（`via_threads: false`，
+  结果正确但白白退化成单线程）。已补上，并加了「鉴权 + 分片」的端到端断言钉死它。
+
+> 测试 338 → 360 项：`sanitizeHeaders` 的取舍、`hasSensitiveHeaders` / `stripSensitiveHeaders`、
+> `resolveAuth` 的四条成功路径与四条失败路径（`env:` 缺变量 / `env:` 缺名字 / `bearer:` 空值 / 未知引用）、
+> 端到端鉴权下载（带头发 200、不带头 401）、**鉴权 + 分片**、以及**同域保留 / 跨域剥离**凭据的重定向断言。
+
 ## [0.5.0] - 2026-10-05
 
 ### 新增
