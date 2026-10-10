@@ -7,6 +7,7 @@
 简体中文 | [English](README.en.md)
 
 ![Version](https://img.shields.io/badge/version-0.5.2-4c7ef3?style=flat-square)
+![npm](https://img.shields.io/npm/v/@having5548/dsh-downloader?style=flat-square&label=npm)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-366%20passed-2fa95e?style=flat-square)
@@ -50,6 +51,12 @@ NO_PROXY=localhost,127.0.0.1,::1,deepseek.com,.deepseek.com
 
 ## 📦 安装
 
+从 npm 安装（已发布到官方源）：
+
+```bash
+dsh plugin --profile desktop add @having5548/dsh-downloader
+```
+
 从 GitHub Release 安装：
 
 ```bash
@@ -64,6 +71,7 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.5.2.tgz
 ```
 
 > profile 名：新版桌面端是 `desktop`，旧版 Web 端是 `web`。
+> npm 页面上显示的 README 是**发布那一刻**的版本 —— 后来改的文档要等下一次发版才会同步过去。
 
 装完打开 **设置 → 下载代理**。
 

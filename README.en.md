@@ -7,6 +7,7 @@
 [简体中文](README.md) | English
 
 ![Version](https://img.shields.io/badge/version-0.5.2-4c7ef3?style=flat-square)
+![npm](https://img.shields.io/npm/v/@having5548/dsh-downloader?style=flat-square&label=npm)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-366%20passed-2fa95e?style=flat-square)
@@ -50,6 +51,12 @@ The two can be used together; they do not interfere. This plugin **never mutates
 
 ## 📦 Install
 
+From npm (published to the official registry):
+
+```bash
+dsh plugin --profile desktop add @having5548/dsh-downloader
+```
+
 From the GitHub release:
 
 ```bash
@@ -64,6 +71,7 @@ dsh plugin --profile desktop add having5548-dsh-downloader-0.5.2.tgz
 ```
 
 > Profile name: the current Electron desktop app uses `desktop`; the older web CLI used `web`.
+> The README shown on the npm page is the one captured **at publish time** — later documentation edits only reach it with the next release.
 
 Then open **Settings → Download proxy**.
 
