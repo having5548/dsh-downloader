@@ -6,11 +6,11 @@
 
 简体中文 | [English](README.en.md)
 
-![Version](https://img.shields.io/badge/version-0.5.2-4c7ef3?style=flat-square)
+![Version](https://img.shields.io/badge/version-0.5.3-4c7ef3?style=flat-square)
 ![npm](https://img.shields.io/npm/v/@having5548/dsh-downloader?style=flat-square&label=npm)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d6?style=flat-square)
 ![Protocols](https://img.shields.io/badge/nodes-ss%20%7C%20trojan%20%7C%20vless%20%7C%20vmess%20%7C%20socks5%20%7C%20http-2b6cb0?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-366%20passed-2fa95e?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-368%20passed-2fa95e?style=flat-square)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 </div>
@@ -60,14 +60,14 @@ dsh plugin --profile desktop add @having5548/dsh-downloader
 从 GitHub Release 安装：
 
 ```bash
-dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.2.tgz
+dsh plugin --profile desktop add https://github.com/having5548/dsh-downloader/releases/latest/download/having5548-dsh-downloader-0.5.3.tgz
 ```
 
 本地打包安装：
 
 ```bash
 npm pack
-dsh plugin --profile desktop add having5548-dsh-downloader-0.5.2.tgz
+dsh plugin --profile desktop add having5548-dsh-downloader-0.5.3.tgz
 ```
 
 > profile 名：新版桌面端是 `desktop`，旧版 Web 端是 `web`。
@@ -364,7 +364,7 @@ dsh_run_proxied({ command: "git clone https://github.com/x/y.git" })
 
 ```bash
 npm install
-node test/smoke.mjs      # 366 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
+node test/smoke.mjs      # 368 项：规则引擎 / 订阅解析 / 配置导入 / 路由 / HTTP 客户端 / 端到端下载 / 会话守卫 / 令牌鉴权
 node --check lib/client.js
 npm pack
 ```

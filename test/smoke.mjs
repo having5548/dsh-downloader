@@ -9,6 +9,7 @@
  */
 import http from "node:http";
 import nodeNet from "node:net";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1051,6 +1052,34 @@ const crossHop = await httpFlow(`${ORIGIN}/auth-cross-redirect`, { headers: { Au
 const crossBody = (await readAll(crossHop)).toString("utf8").trim();
 check("a cross-host redirect drops the token", crossBody.startsWith("auth=none"), crossBody);
 check("a cross-host redirect keeps ordinary headers", crossBody.includes("keep=yes"), crossBody);
+
+// ---------------------------------------------------------------------------
+section("宿主稳定性：上游断管不得崩掉进程");
+// 实测事故（crash-2026-10-11T03-46 / 03-48）：连接器进程死后往 child.stdin 写会抛 EPIPE，
+// 而这些管道当时没有任何 error 监听 → 未捕获异常 → DSH 宿主被杀。
+// 这里在**独立子进程**里复现：让子进程关掉 stdin 但继续活着（于是 ended 不会被置位，管道却已断），
+// 再灌超过管道缓冲的数据。没有修复时探针会以未捕获异常退出。
+const crashProbe = await new Promise((resolve) => {
+	const transportsUrl = new URL("../lib/core/transports.js", import.meta.url).href;
+	const script = [
+		'const { spawn } = await import("node:child_process");',
+		`const { stdioFace } = await import(${JSON.stringify(transportsUrl)});`,
+		'const child = spawn(process.execPath, ["-e", "process.stdin.destroy(); setTimeout(() => {}, 8000)"], { stdio: ["pipe", "pipe", "pipe"] });',
+		'const face = stdioFace(child);',
+		'await new Promise((r) => setTimeout(r, 600));',
+		'for (let i = 0; i < 20; i += 1) face.write(Buffer.alloc(64 * 1024, 1));',
+		'await new Promise((r) => setTimeout(r, 400));',
+		'console.log("SURVIVED");',
+		'process.exit(0);'
+	].join("\n");
+	const probe = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+	let output = "";
+	probe.stdout.on("data", (chunk) => { output += chunk.toString(); });
+	probe.stderr.on("data", (chunk) => { output += chunk.toString(); });
+	probe.on("exit", (code) => resolve({ code, output }));
+});
+equal("writing to a broken upstream pipe does not kill the process", crashProbe.code, 0);
+check("the probe survived and reported so", crashProbe.output.includes("SURVIVED"), crashProbe.output.slice(-400));
 
 // ---------------------------------------------------------------------------
 section("client bundle and patch metadata");

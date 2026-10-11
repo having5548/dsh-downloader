@@ -9,6 +9,31 @@
 
 ## [未发布]
 
+## [0.5.3] - 2026-10-11
+
+### 修复
+
+- **上游断管会把整个 DSH 宿主崩掉**（严重，宿主连续崩了两次）。
+  现象：`crash-2026-10-11T03-46-46-081Z-host.log` 与 `03-48-03-999Z-host.log` 的栈指向同一处：
+  ```
+  dsh: fatal uncaught exception: Error: write EPIPE
+      at Writable.write (node:internal/streams/writable:508:10)
+      at Object.write (.../@having5548/dsh-downloader/lib/core/transports.js:598:28)
+      at Socket.<anonymous> (.../@having5548/dsh-downloader/lib/core/proxy-server.js:154:9)
+  ```
+  根因：`nativeConnect()` 用 `stdio: ["pipe","pipe","pipe"]` 起 Go 连接器，但**三根管道一个 `error` 监听都没挂**。
+  连接器进程一死（连接失败 / 超时 / 被 kill），管道随即断裂，之后任何一次写入都会让 `child.stdin` 抛出
+  `EPIPE` —— 而在 Node 里**没有监听者的 `error` 事件就是未捕获异常**，直接把宿主带走。
+  原有的 `ended` 标志挡不住这个竞态：写入可能排在一个已经断掉的管道上，而 `exit` 事件还没派发。
+  修法（三层）：
+  1. 新增 `stdioFace(child)`：给 `stdin` / `stdout` / `stderr` 与子进程本身都挂 `error` 监听，
+     写入再包一层 try/catch（防同步抛出），并保留连接器最后的 stderr 供排查；
+  2. `ProxyServer.#relay()` 里的 `face.write(chunk)` 包 try/catch，失败即关闭上游并销毁客户端连接；
+  3. 新增**独立子进程**回归测试：让子进程关掉 stdin 但继续活着（于是 `ended` 不会置位、管道却已断），
+     再灌 1.25 MB 数据。旧写法在该探针下必崩（实测 `exit=1`、`code: 'EOF'`），修复后存活。
+
+> 测试 366 → 368 项。
+
 ## [0.5.2] - 2026-10-10
 
 两处都是把 `dsh_run_proxied` 真正用起来时才暴露的：`git push` 打插件内核**必定**失败。
