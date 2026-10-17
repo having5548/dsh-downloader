@@ -17,6 +17,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { RuleEngine } from "../lib/core/rules.js";
 import { ProxyServer } from "../lib/core/proxy-server.js";
 import { parseSubscription } from "../lib/core/subscription.js";
+import * as harnessProxy from "../lib/core/harness-proxy.js";
 import { decideRoute, NoUpstreamError } from "../lib/download/route.js";
 import { attemptDownload, HttpStatusError } from "../lib/download/fetch-file.js";
 import { connectTunnel, httpFlow, parseProxyUrl } from "../lib/download/http.js";
@@ -1052,6 +1053,85 @@ const crossHop = await httpFlow(`${ORIGIN}/auth-cross-redirect`, { headers: { Au
 const crossBody = (await readAll(crossHop)).toString("utf8").trim();
 check("a cross-host redirect drops the token", crossBody.startsWith("auth=none"), crossBody);
 check("a cross-host redirect keeps ordinary headers", crossBody.includes("keep=yes"), crossBody);
+
+// ---------------------------------------------------------------------------
+section("harness 出网代理：固定端口 + 持久化令牌 + 写 .env");
+const hDir = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-harness-"));
+const hEnv = path.join(hDir, ".env");
+// 1) 令牌要持久化：同一目录两次读取必须一致；只读模式不建文件
+const hToken = harnessProxy.loadHarnessToken(hDir);
+equal("the harness token is stable across calls", harnessProxy.loadHarnessToken(hDir), hToken);
+check("the harness token is a long hex string", /^[0-9a-f]{48}$/.test(hToken), hToken);
+const hOther = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-harness2-"));
+equal("a missing token is not created in read-only mode", harnessProxy.loadHarnessToken(hOther, { create: false }), null);
+check("read-only mode writes no file", !fs.existsSync(harnessProxy.harnessTokenFile(hOther)));
+
+// 2) URL 形状与入参校验
+equal("buildHarnessProxyUrl embeds the credentials", harnessProxy.buildHarnessProxyUrl({ port: 17890, token: "abc" }), "http://dsh:abc@127.0.0.1:17890");
+await expectThrow("buildHarnessProxyUrl rejects a bad port", () => harnessProxy.buildHarnessProxyUrl({ port: 0, token: "abc" }));
+await expectThrow("buildHarnessProxyUrl rejects an empty token", () => harnessProxy.buildHarnessProxyUrl({ port: 17890, token: "" }));
+
+// 3) 6 个键的增删，且不碰其它行
+const hUrl = "http://dsh:t@127.0.0.1:17890";
+const hSeed = "# 我自己的注释\nFOO=bar\nHTTP_PROXY=http://old:1\nNO_PROXY=localhost\n";
+const hUpserted = harnessProxy.upsertHarnessProxyEnv(hSeed, hUrl);
+for (const key of harnessProxy.HARNESS_ENV_KEYS) {
+	check(`upsert writes ${key}`, hUpserted.includes(`${key}=${hUrl}`), hUpserted);
+}
+equal("upsert replaces rather than duplicates", hUpserted.split("HTTP_PROXY=").length - 1, 1);
+check("upsert keeps unrelated lines", hUpserted.includes("FOO=bar") && hUpserted.includes("# 我自己的注释"));
+const hStripped = harnessProxy.stripHarnessProxyEnv(hUpserted);
+for (const key of harnessProxy.HARNESS_ENV_KEYS) {
+	check(`strip removes ${key}`, !new RegExp(`^${key}=`, "im").test(hStripped), hStripped);
+}
+check("strip keeps unrelated lines and NO_PROXY", hStripped.includes("FOO=bar") && /^NO_PROXY=/im.test(hStripped));
+
+// 4) 写入真实文件：备份 + NO_PROXY 补回环与 AI 域名 + 其它行保留
+fs.writeFileSync(hEnv, "FOO=bar\nNO_PROXY=localhost\n", "utf8");
+const hReceipt = harnessProxy.writeHarnessProxyEnv({ envPath: hEnv, url: hUrl, directDomains: ["deepseek.com", "kimi.com"], stamp: "fixed" });
+check("write reports a backup path", hReceipt.backupPath !== null && fs.existsSync(hReceipt.backupPath), String(hReceipt.backupPath));
+const hWritten = fs.readFileSync(hEnv, "utf8");
+check("write sets HTTP_PROXY", /^HTTP_PROXY=http:\/\/dsh:t@127\.0\.0\.1:17890$/m.test(hWritten), hWritten);
+check("write keeps the unrelated line", hWritten.includes("FOO=bar"));
+check("write adds loopback to NO_PROXY", /^NO_PROXY=.*127\.0\.0\.1/m.test(hWritten), hWritten);
+check("write adds the AI domains to NO_PROXY", /^NO_PROXY=.*deepseek\.com/m.test(hWritten) && /^NO_PROXY=.*kimi\.com/m.test(hWritten), hWritten);
+const hInspect = harnessProxy.inspectHarnessProxy({ envPath: hEnv, expectedUrl: hUrl });
+check("inspect says the env matches", hInspect.matches === true, JSON.stringify(hInspect));
+check("inspect reports the proxy vars present", hInspect.hasProxyVars === true);
+const hMismatch = harnessProxy.inspectHarnessProxy({ envPath: hEnv, expectedUrl: "http://dsh:other@127.0.0.1:17890" });
+check("inspect detects a token/port mismatch", hMismatch.matches === false);
+
+// 5) 撤销：变量消失、其它行与 NO_PROXY 留下
+const hCleared = harnessProxy.clearHarnessProxyEnv({ envPath: hEnv, stamp: "fixed2" });
+check("clear reports a change", hCleared.changed === true);
+const hAfter = fs.readFileSync(hEnv, "utf8");
+check("clear removed HTTP_PROXY", !/^HTTP_PROXY=/im.test(hAfter), hAfter);
+check("clear kept NO_PROXY and the unrelated line", /^NO_PROXY=/im.test(hAfter) && hAfter.includes("FOO=bar"));
+equal("clearing twice is a no-op", harnessProxy.clearHarnessProxyEnv({ envPath: hEnv }).changed, false);
+
+// 6) 内核必须同时接受两个令牌：本进程令牌与持久化令牌
+const dualCore = new ProxyServer({ engine: new RuleEngine({}), resolveNode: () => null, token: "scope-1", tokens: ["harness-1"] });
+const dualPort = await dualCore.start(0);
+const dualHead = (authorization) => (authorization === null ? "" : `Proxy-Authorization: ${authorization}\r\n`);
+async function dualStatus(authorization) {
+	return await new Promise((resolve, reject) => {
+		const socket = nodeNet.connect({ host: "127.0.0.1", port: dualPort });
+		let buffer = "";
+		const timer = setTimeout(() => { socket.destroy(); resolve(buffer); }, 8000);
+		socket.once("connect", () => socket.write(`CONNECT example.invalid:443 HTTP/1.1\r\nHost: example.invalid:443\r\n${dualHead(authorization)}\r\n`));
+		socket.on("data", (chunk) => { buffer += chunk.toString("latin1"); clearTimeout(timer); socket.destroy(); resolve(buffer); });
+		socket.once("error", (error) => { clearTimeout(timer); reject(error); });
+	});
+}
+const dualScope = await dualStatus("Bearer scope-1");
+const dualHarness = await dualStatus("Bearer harness-1");
+const dualBasic = await dualStatus(`Basic ${Buffer.from("dsh:harness-1").toString("base64")}`);
+const dualBad = await dualStatus("Bearer nope");
+check("the per-process token is accepted", !/^HTTP\/1\.1 407/.test(dualScope), dualScope.slice(0, 40));
+check("the harness token is accepted", !/^HTTP\/1\.1 407/.test(dualHarness), dualHarness.slice(0, 40));
+check("the harness token works via Basic too", !/^HTTP\/1\.1 407/.test(dualBasic), dualBasic.slice(0, 40));
+check("an unknown token is still refused", /^HTTP\/1\.1 407/.test(dualBad), dualBad.slice(0, 40));
+dualCore.stop();
 
 // ---------------------------------------------------------------------------
 section("宿主稳定性：上游断管不得崩掉进程");

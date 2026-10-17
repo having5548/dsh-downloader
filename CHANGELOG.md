@@ -9,6 +9,36 @@
 
 ## [未发布]
 
+## [0.6.0] - 2026-10-17
+
+### 新增
+
+- **`harnessProxy`：让 harness 自身的出网也走内核**（原先只有 `dsh_download` 与 `dsh_run_proxied` 走）。
+  做法是把内核绑到**固定端口**、额外接受一个**持久化令牌**，再把
+  `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 写进 `$DSH_HOME/.env`（写前备份）。
+  DSH 启动时据此装全局 dispatcher 并把变量传给子进程，因此**这些会跟着走**：
+  `web_fetch`、shell 子进程里的 `curl`/`git`/`npm`、MCP 的 HTTP 传输、jobs/workflow/subagent 派生的进程。
+  **覆盖不到** Electron 渲染进程与内嵌 webview —— Chromium 读的是**系统代理**，不读环境变量。
+- 新工具 `dsh_harness_proxy`（`status` / `apply` / `remove`），新配置项
+  `harnessProxy`（开关）与 `harnessProxyPort`（默认 `17890`）。
+- 新模块 `lib/core/harness-proxy.js`：令牌持久化、URL 拼装、`.env` 的增/删/查、备份。
+
+### 设计要点
+
+- **令牌必须持久化**：`.env` 里要写死它，随机令牌每次重启都会 407。存在
+  `<数据目录>/harness-token.txt`（`mode 0o600`）。
+- **端口必须固定**：`.env` 指不到随机端口。被占用时自动退回随机端口并 warn —— 此时开放实际不生效（`status` 会报「与配置不一致」）。
+- **`NO_PROXY` 自动补上回环 + 国内 AI 平台域名**：前者避免「代理指向自己」的循环，后者保证代理抖动时不打断模型长连接。
+- **不会有自指环**：内核与订阅自己拉的流量走 `httpFlow`（Node `http/https` 模块），**不受全局 dispatcher 影响** —— 这是刻意确认过的，插件里没有用 `fetch()` 的核心代码。
+- 内核原先只接受一个令牌，现改为**令牌集合**（本进程令牌 + 持久化令牌），unknown 令牌照旧 407。
+
+### 兼容
+
+`harnessProxy` 默认**关闭**，行为与 0.5.3 完全一致；不开时内核仍是随机端口 + 随机令牌，只服务本插件自己的下载。
+
+> 测试 368 → 406 项：令牌持久化与只读模式、URL 校验、6 个 `*_PROXY` 键的增删幂等、
+> 备份与还原、`NO_PROXY` 合并、不一致检测，以及**内核同时接受两个令牌 / 未知令牌仍被拒**的运行时断言。
+
 ## [0.5.3] - 2026-10-11
 
 ### 修复
