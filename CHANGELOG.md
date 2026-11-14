@@ -9,6 +9,26 @@
 
 ## [未发布]
 
+## [0.7.4] - 2026-11-14
+
+### 变更
+
+- **适配 dsh-ops**（你说的那个 shell 工具插件）。两点：
+  1. **按调用者视角解析工具**：dsh-ops 的 `ops_bash` 注册在 **Agent 自己的层**（其源码注释原话是
+     "ops_bash lands in the Agent's own layer"），只看 `ctx.tools.definitions()` 的全局视图会看不见它，
+     于是一路退化到别的 shell 工具。现在优先 `ctx.tools.definitions(exec.agent)`，取不到才回退全局 ——
+     有 `ops_bash` 就用它。
+  2. **委派参数按目标工具的 schema 裁剪**：`ops_bash` 的 `description` 是必填，而 `win_bash` 根本没有
+     这个字段。现在只发目标工具声明过的键，两边都不出错。
+
+### 说明
+
+`dsh-ops` 自带一个 `download-guard`（挂在 `tools/pre-execute` 上）。它**只有配置了
+`downloadGuard.template` 才注册监听**，本机没配，所以默认不与本插件的守卫叠加。若哪天你打开了它，
+注意它会按模板自行判定，可能与本插件「已带代理就放行」的规则不一致。
+
+> 测试 437 → 442 项：schema 裁剪（ops_bash 要 description / win_bash 不接受它 / 无 schema 时保持旧形状）。
+
 ## [0.7.3] - 2026-11-14
 
 ### 修复

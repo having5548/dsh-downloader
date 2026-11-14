@@ -986,6 +986,18 @@ equal("resolveShellTool tolerates an empty list", resolve({ available: new Set()
 const forOps = resolve({ available: new Set(["ops_bash"]), requested: "pwsh" });
 const opsPrefix = shellProxy.buildShellPrefix({ shell: forOps.shell, proxyUrl: "http://dsh:t@127.0.0.1:9", noProxy: "n" });
 check("the composed prefix matches ops_bash's dialect", opsPrefix.startsWith("export HTTP_PROXY=") && !opsPrefix.includes("$env:"), opsPrefix.slice(0, 60));
+
+// 参数必须按目标工具 schema 裁剪：dsh-ops 的 ops_bash 要 description，win_bash 没这个字段
+const opsSchema = { type: "object", properties: { command: {}, description: {}, workdir: {}, script_path: {} }, required: ["command", "description"] };
+const winSchema = { type: "object", properties: { command: {}, workdir: {}, timeoutMs: {}, run_in_background: {} }, required: ["command"] };
+const opsArgs = shellProxy.buildShellToolArguments({ command: "git status", description: "看状态", workdir: "H:/x", schema: opsSchema });
+check("ops_bash is given a description (required there)", typeof opsArgs.description === "string" && opsArgs.description === "看状态", JSON.stringify(opsArgs));
+check("ops_bash still gets workdir", opsArgs.workdir === "H:/x");
+const winArgs = shellProxy.buildShellToolArguments({ command: "git status", description: "看状态", workdir: "H:/x", schema: winSchema });
+check("win_bash is not handed an undeclared description", winArgs.description === undefined, JSON.stringify(winArgs));
+equal("win_bash still gets its declared workdir", winArgs.workdir, "H:/x");
+const noSchemaArgs = shellProxy.buildShellToolArguments({ command: "git status" });
+check("without a schema the historic shape is kept", typeof noSchemaArgs.description === "string", JSON.stringify(noSchemaArgs));
 equal("buildProxyUrl carries the token", shellProxy.buildProxyUrl({ port: 1234, token: "abc" }), "http://dsh:abc@127.0.0.1:1234");
 check("the explanation names the foreign host", shellProxy.explainShellRouting({ foreign: [{ url: "u", host: "github.com" }] }).includes("github.com"));
 
