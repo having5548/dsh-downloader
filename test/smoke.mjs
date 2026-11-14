@@ -1196,6 +1196,90 @@ try {
 	compileError = error instanceof Error ? error.message : String(error);
 }
 check("the client bundle compiles as a script", clientCompiles, compileError);
+// 真正跑一遍 apply()：用一个最小 ctx 捕获注册结果与字典，而不是只 grep 源码。
+const registered = [];
+let capturedDicts = null;
+let capturedBundle = null;
+const localeFace = {
+	register(namespace, dicts) { capturedDicts = { namespace, dicts }; return () => {} },
+	bind() { return (key) => key },
+	getLocale() { return { active: "zh", revision: 1, locales: [] } },
+	getSnapshot() { return { active: "zh", revision: 1, locales: [] } },
+	subscribe() { return () => {} }
+};
+const fakeCtx = {
+	slots: {
+		inject(name, factory) { return factory() },
+		register(definition) { registered.push(definition); return () => {} }
+	},
+	// 真实环境里本插件只 inject 了 slots，locale 只能经可选访问拿到 ——
+	// 直接暴露 ctx.locale 会让这个测试失去意义（那正是漏掉时全变英文的原因）。
+	get(name) { return name === "locale" ? localeFace : undefined }
+};
+try {
+	const sandbox = {
+		window: {
+			__ModuleLoader__: { load(bundle) { capturedBundle = bundle } },
+			localStorage: { getItem() { return null }, setItem() {} }
+		},
+		document: { getElementById() { return null }, createElement() { return { textContent: "", id: "" } }, head: { appendChild() {} }, hidden: false },
+		localStorage: { getItem() { return null }, setItem() {} },
+		fetch() { return Promise.reject(new Error("offline")) },
+		setInterval() { return 0 },
+		clearInterval() {},
+		setTimeout() { return 0 },
+		clearTimeout() {},
+		console
+	};
+	vm.createContext(sandbox);
+	new vm.Script(clientSource, { filename: "lib/client.js" }).runInContext(sandbox);
+	if (capturedBundle && typeof capturedBundle.factory === "function") {
+		const requireStub = () => ({
+			createElement: () => null,
+			Fragment: "Fragment",
+			useState: () => [null, () => {}],
+			useEffect: () => {},
+			useCallback: (fn) => fn,
+			useRef: () => ({ current: null }),
+			useSyncExternalStore: () => 0
+		});
+		const half = capturedBundle.factory(requireStub);
+		half.apply(fakeCtx);
+	}
+} catch (error) {
+	check("the client apply() runs against a minimal ctx", false, error instanceof Error ? error.message : String(error));
+}
+equal("the bundle id is the package name", capturedBundle && capturedBundle.id, "@having5548/dsh-downloader");
+const slotNames = registered.map((entry) => entry.name);
+check("apply() registers the sidebar panel row", slotNames.includes("sidebar.panellist"), slotNames.join(","));
+check("apply() registers the main panel under the sidebar entry id", registered.some((entry) => entry.name === "main" && entry.key === "dsh-downloader"), JSON.stringify(slotNames));
+check("apply() still registers the settings section", slotNames.includes("settings.section"));
+check("apply() still registers the traffic badge", slotNames.includes("sidebar.footer.action"));
+check("both entries inject the same page variant", registered.filter((entry) => entry.name === "main" || entry.name === "settings.section").every((entry) => typeof entry.inject === "function"));
+
+// 两个入口的 UI 必须一致：都由同一个 DownloaderPage 渲染
+check("the client defines one shared DownloaderPage", /function DownloaderPage\(/.test(clientSource));
+check("the main panel renders DownloaderPage", /name: 'main'[\s\S]{0,500}?\}, DownloaderPage\)/.test(clientSource));
+check("the settings section renders DownloaderPage", /name: 'settings\.section'[\s\S]{0,500}?\}, DownloaderPage\)/.test(clientSource));
+
+// 字典必须双语对齐，且源码里每个 t('key') 都有译文（漏翻译是这一类改动的典型 bug）
+check("the client registers both dictionaries", capturedDicts !== null && capturedDicts.namespace === "dsh-downloader");
+if (capturedDicts !== null) {
+	const zhKeys = Object.keys(capturedDicts.dicts.zh).sort();
+	const enKeys = Object.keys(capturedDicts.dicts.en).sort();
+	equal("the two dictionaries have the same key count", zhKeys.length, enKeys.length);
+	equal("the two dictionaries have identical keys", zhKeys.join(","), enKeys.join(","));
+	const used = new Set();
+	const re = /\bt\('([A-Za-z][A-Za-z0-9]*)'/g;
+	let match = re.exec(clientSource);
+	while (match !== null) { used.add(match[1]); match = re.exec(clientSource); }
+	const missingZh = [...used].filter((key) => capturedDicts.dicts.zh[key] === undefined);
+	const missingEn = [...used].filter((key) => capturedDicts.dicts.en[key] === undefined);
+	check("every t() key used by the page exists in zh", missingZh.length === 0, missingZh.join(","));
+	check("every t() key used by the page exists in en", missingEn.length === 0, missingEn.join(","));
+	check("the page renders in both languages", used.size > 40, `${used.size} keys`);
+}
+
 check("the patch ships with the package", Array.isArray(pkg.files) && pkg.files.includes("cordis.patch.yml"));
 check("the size data ships with the package", Array.isArray(pkg.files) && pkg.files.includes("lib"));
 
