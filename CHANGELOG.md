@@ -9,6 +9,24 @@
 
 ## [未发布]
 
+## [0.7.3] - 2026-11-14
+
+### 修复
+
+- **`dsh_run_proxied` 一执行就报「Tool batch execution failed」**（整条能力不可用）。两层根因：
+  1. **DSH 0.8 换了 `tools.execute` 的签名** —— 旧版是单调用
+     `{ callId, rootCallId, name, arguments, agent, parent, signal }`；新版是**批次**
+     `{ calls: [{ type: 'tool-call', id, name, arguments(JSON 字符串) }], agent, signal }`，
+     返回 `{ results: [{ callId, result }] }`。用旧形状打新服务**不会**报「参数不对」，只会得到一句
+     没有信息量的 `Tool batch execution failed`。新增 `executeDelegated()`：先探测
+     （`typeof tools.setExecutor === "function"`）再分派，两代都支持。
+  2. **shell 工具名是硬编码的** —— 旧实现探不到 `pwsh`/`bash` 就兜底到并不存在的 `pwsh`。
+     现在按 `ops_bash` → `bash` → `win_bash` → `pwsh` **按能力探测**，并让前缀方言跟着实际
+     委派的工具走（`ops_bash`/`win_bash` 是 bash，前缀必须是 `export X='…';` 而不是 `$env:X='…';`）。
+- 委派失败时不再只显示框架的笼统错误，而是带上**委派到哪个工具**与**每种尝试的原始报错**。
+
+> 测试 428 → 437 项：两代 `tools.execute` 形状、批次 callId 不匹配必须报错、缺执行服务要点名。
+
 ## [0.7.2] - 2026-11-14
 
 ### 修复

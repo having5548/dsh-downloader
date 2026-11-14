@@ -970,6 +970,22 @@ check("the pwsh prefix configures git's proxy", pwshPrefix.includes("$env:GIT_CO
 check("the pwsh prefix tells git to use basic proxy auth", pwshPrefix.includes("$env:GIT_CONFIG_KEY_1='http.proxyAuthMethod';") && pwshPrefix.includes("$env:GIT_CONFIG_VALUE_1='basic';"));
 check("the pwsh prefix declares the git config count", pwshPrefix.includes("$env:GIT_CONFIG_COUNT='2';"));
 check("the bash prefix configures git too", bashPrefix.includes("export GIT_CONFIG_KEY_0='http.proxy';") && bashPrefix.includes("export GIT_CONFIG_VALUE_1='basic';"), bashPrefix);
+
+// shell 工具是**按名字探测**的：不同 DSH 版本叫法不同，旧实现探不到就兜底到
+// 不存在的 "pwsh"，整个调用炸成 "Tool batch execution failed"（实测踩过）。
+const resolve = shellProxy.resolveShellTool;
+equal("resolveShellTool prefers the requested dialect", resolve({ available: new Set(["pwsh", "ops_bash"]), requested: "pwsh" }).name, "pwsh");
+const followsBash = resolve({ available: new Set(["ops_bash"]), requested: "pwsh" });
+check("resolveShellTool follows an available bash tool", followsBash.name === "ops_bash" && followsBash.shell === "bash", JSON.stringify(followsBash));
+const picksWinBash = resolve({ available: new Set(["win_bash"]), requested: "bash" });
+check("resolveShellTool picks win_bash next", picksWinBash.name === "win_bash" && picksWinBash.shell === "bash", JSON.stringify(picksWinBash));
+equal("resolveShellTool prefers bash when asked", resolve({ available: new Set(["pwsh", "win_bash"]), requested: "bash" }).name, "win_bash");
+equal("resolveShellTool returns null when nothing matches", resolve({ available: new Set(["read", "grep"]), requested: "pwsh" }), null);
+equal("resolveShellTool tolerates an empty list", resolve({ available: new Set(), requested: "bash" }), null);
+// 方言必须跟着实际工具走：ops_bash 拿到 bash 前缀
+const forOps = resolve({ available: new Set(["ops_bash"]), requested: "pwsh" });
+const opsPrefix = shellProxy.buildShellPrefix({ shell: forOps.shell, proxyUrl: "http://dsh:t@127.0.0.1:9", noProxy: "n" });
+check("the composed prefix matches ops_bash's dialect", opsPrefix.startsWith("export HTTP_PROXY=") && !opsPrefix.includes("$env:"), opsPrefix.slice(0, 60));
 equal("buildProxyUrl carries the token", shellProxy.buildProxyUrl({ port: 1234, token: "abc" }), "http://dsh:abc@127.0.0.1:1234");
 check("the explanation names the foreign host", shellProxy.explainShellRouting({ foreign: [{ url: "u", host: "github.com" }] }).includes("github.com"));
 
@@ -1053,6 +1069,58 @@ const crossHop = await httpFlow(`${ORIGIN}/auth-cross-redirect`, { headers: { Au
 const crossBody = (await readAll(crossHop)).toString("utf8").trim();
 check("a cross-host redirect drops the token", crossBody.startsWith("auth=none"), crossBody);
 check("a cross-host redirect keeps ordinary headers", crossBody.includes("keep=yes"), crossBody);
+
+// ---------------------------------------------------------------------------
+section("跨 DSH 版本的工具委派");
+// DSH 0.8 把 tools.execute 从「单调用」换成了「批次 API」。用旧形状打新服务
+// 不会报「参数不对」，只会得到一句没有信息量的 "Tool batch execution failed"
+// （实测踩过），所以两种形状都要钉住。
+const { executeDelegated } = await import("../lib/index.js").then((mod) => mod.__internals);
+
+const legacyCalls = [];
+const legacyTools = {
+	async execute(input) {
+		legacyCalls.push(input);
+		return { isError: false, content: [{ type: "text", text: "legacy-ok" }] };
+	}
+};
+const legacyResult = await executeDelegated(legacyTools, {
+	callId: "call-1", rootCallId: "root-1", name: "pwsh", arguments: { command: "echo hi" }, agent: { id: "a" }, parent: Symbol("p"), signal: undefined
+});
+equal("the legacy single-call shape is used when setExecutor is absent", legacyCalls[0].name, "pwsh");
+equal("the legacy shape passes the arguments object through", legacyCalls[0].arguments.command, "echo hi");
+check("the legacy result is returned unchanged", legacyResult.content[0].text === "legacy-ok");
+
+const batchCalls = [];
+const batchTools = {
+	setExecutor() {},
+	async execute(input) {
+		batchCalls.push(input);
+		const call = input.calls[0];
+		return { results: [{ callId: call.id, result: { isError: false, content: [{ type: "text", text: "batch-ok" }] } }] };
+	}
+};
+const batchResult = await executeDelegated(batchTools, {
+	callId: "call-2", name: "win_bash", arguments: { command: "echo hi" }, agent: { id: "a" }, signal: undefined
+});
+check("the batch shape wraps one tool-call block", Array.isArray(batchCalls[0].calls) && batchCalls[0].calls[0].type === "tool-call");
+equal("the batch shape JSON-encodes the arguments", batchCalls[0].calls[0].arguments, JSON.stringify({ command: "echo hi" }));
+equal("the batch shape forwards the tool name", batchCalls[0].calls[0].name, "win_bash");
+check("the batch result is unwrapped to the call result", batchResult.content[0].text === "batch-ok");
+
+// 批次没回对应 callId 时必须报错，而不是拿错的结果继续
+const wrongIdTools = {
+	setExecutor() {},
+	async execute() { return { results: [{ callId: "other", result: { isError: false, content: [] } }] }; }
+};
+let wrongIdThrew = false;
+try { await executeDelegated(wrongIdTools, { callId: "call-3", name: "win_bash", arguments: {} }); } catch { wrongIdThrew = true; }
+check("a batch that answers another callId is rejected", wrongIdThrew);
+
+// 没有执行服务时要给出可读的错
+let noServiceThrew = "";
+try { await executeDelegated(undefined, { callId: "c", name: "x", arguments: {} }); } catch (error) { noServiceThrew = String(error.message ?? error); }
+check("a missing tool service fails loudly", noServiceThrew.includes("工具执行服务"), noServiceThrew);
 
 // ---------------------------------------------------------------------------
 section("harness 出网代理：固定端口 + 持久化令牌 + 写 .env");
