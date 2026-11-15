@@ -267,7 +267,7 @@ The upstream is resolved in this order; the first hit wins:
 | `downloadTimeoutS` | `600` | per-download wall-clock budget |
 | `threads` | `4` | segmented connection count; `1` = single stream. Falls back to one connection when the server lacks `Range`, answers it dishonestly, or the file is under 1 MiB |
 | `stallTimeoutS` | `30` | abort after this long with no data |
-| `insecureTls` | `false` | skip TLS verification (corporate TLS interception only) |
+| `insecureTls` | `true` | skip TLS certificate verification. **On by default** (since 2026-11-15): accepts any certificate, self-signed and MITM included |
 | `allowOutsideWorkspace` | `false` | allow `save_path` outside the workspace and download directory |
 | `maxRedirects` | `10` | maximum redirect hops |
 

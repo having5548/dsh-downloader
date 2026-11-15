@@ -1087,7 +1087,15 @@ section("跨 DSH 版本的工具委派");
 // DSH 0.8 把 tools.execute 从「单调用」换成了「批次 API」。用旧形状打新服务
 // 不会报「参数不对」，只会得到一句没有信息量的 "Tool batch execution failed"
 // （实测踩过），所以两种形状都要钉住。
-const { executeDelegated } = await import("../lib/index.js").then((mod) => mod.__internals);
+const hostModule = await import("../lib/index.js");
+const { executeDelegated } = hostModule.__internals;
+
+// 用户 2026-11-15 明确要求：以后默认禁用 TLS 证书校验。
+check(
+	"insecureTls defaults to true in the host Config",
+	hostModule.Config?.dict?.insecureTls?.meta?.default === true,
+	JSON.stringify(hostModule.Config?.dict?.insecureTls?.meta)
+);
 
 const legacyCalls = [];
 const legacyTools = {
@@ -1263,6 +1271,8 @@ check("cordis.patch.yml uses the matching entry id", patchSource.includes(`id: $
 check("the entry id matches the host half", entryId === "dsh-downloader");
 check("the client registers a settings section", clientCode.includes("'settings.section'"));
 check("the client resolves configForms lazily", clientCode.includes("ctx.get('configForms')"));
+// 默认值与宿主保持一致：跳过 TLS 证书校验
+check("the client defaults insecureTls to true", /insecureTls: true,/.test(clientSource), "client DEFAULTS 应为 true");
 check("the client does not use the removed settingsScope", !clientCode.includes("settingsScope"));
 check("the client wraps scope.subscribe to keep `this`", clientCode.includes("function (listener) { return scope.subscribe(listener) }"));
 check("the client wraps scope.getSnapshot to keep `this`", clientCode.includes("function () { return scope.getSnapshot() }"));

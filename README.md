@@ -271,7 +271,7 @@ dsh_run_proxied({ command: "git clone https://github.com/x/y.git" })
 | `downloadTimeoutS` | `600` | 单次下载总超时 |
 | `stallTimeoutS` | `30` | 无数据停滞多久判定卡死 |
 | `threads` | `4` | 多线程下载的分片连接数；`1` = 单连接。服务端不支持 `Range`、响应不可信、或文件 < 1 MiB 时自动回退单连接 |
-| `insecureTls` | `false` | 跳过 TLS 校验（企业 TLS 解密环境才开） |
+| `insecureTls` | `true` | 跳过 TLS 证书校验。**默认开启**（2026-11-15 起）：始终接受任何证书，含自签与中间人 |
 | `allowOutsideWorkspace` | `false` | 允许 `save_path` 写到工作区与下载目录之外 |
 | `maxRedirects` | `10` | 重定向上限 |
 

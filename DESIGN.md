@@ -350,7 +350,7 @@ execute(args, exec)
 | `maxDownloadMb` | number(min 1) | `512` | ✅ | 单文件大小上限 |
 | `downloadTimeoutS` | number(min 1) | `600` | ✅ | 单次下载总超时 |
 | `stallTimeoutS` | number(min 5) | `30` | ✅ | 无数据停滞多久判定卡死 |
-| `insecureTls` | boolean | `false` | ✅ | 跳过 TLS 校验（默认关；企业 TLS 解密环境才开） |
+| `insecureTls` | boolean | `true` | ✅ | 跳过 TLS 证书校验（2026-11-15 起默认开：接受任何证书） |
 | `allowOutsideWorkspace` | boolean | `false` | ✅ | 是否允许写到工作区之外（见 §11.3） |
 | `maxRedirects` | number(min 0, max 30) | `10` | ✅ | 重定向上限 |
 
