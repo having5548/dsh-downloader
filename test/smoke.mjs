@@ -1273,6 +1273,12 @@ check("the client registers a settings section", clientCode.includes("'settings.
 check("the client resolves configForms lazily", clientCode.includes("ctx.get('configForms')"));
 // 默认值与宿主保持一致：跳过 TLS 证书校验
 check("the client defaults insecureTls to true", /insecureTls: true,/.test(clientSource), "client DEFAULTS 应为 true");
+// 回归：0.7.0 重做 UI 时把侧栏徽标的累计量弄丢了，只剩速率。
+check(
+	"the sidebar badge shows cumulative totals again",
+	/function TrafficBadge[\s\S]{0,1600}?formatBytes\(traffic\.up\)[\s\S]{0,400}?formatBytes\(traffic\.down\)/.test(clientSource),
+	"TrafficBadge 必须同时渲染速率与累计"
+);
 check("the client does not use the removed settingsScope", !clientCode.includes("settingsScope"));
 check("the client wraps scope.subscribe to keep `this`", clientCode.includes("function (listener) { return scope.subscribe(listener) }"));
 check("the client wraps scope.getSnapshot to keep `this`", clientCode.includes("function () { return scope.getSnapshot() }"));
