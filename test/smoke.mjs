@@ -20,7 +20,7 @@ import { parseSubscription } from "../lib/core/subscription.js";
 import * as harnessProxy from "../lib/core/harness-proxy.js";
 import { decideRoute, NoUpstreamError } from "../lib/download/route.js";
 import { attemptDownload, HttpStatusError } from "../lib/download/fetch-file.js";
-import { connectTunnel, httpFlow, parseProxyUrl } from "../lib/download/http.js";
+import { connectTunnel, httpFlow, parseProxyUrl, TunnelAgent } from "../lib/download/http.js";
 import { filenameFromDisposition, filenameFromUrl, humanSize, isPrivateIp, pickFilename, sanitizeFilename } from "../lib/download/util.js";
 
 let passed = 0;
@@ -887,6 +887,26 @@ await expectThrow(
 	async () => connectTunnel({ host: "127.0.0.1", port: gatedPort }, "127.0.0.1", 443, 3000),
 	/407/
 );
+
+// Regression: `https.request(url, { agent: false, createConnection: () => sock })`
+// is a silent no-op — Node builds a throwaway default agent and dials the origin
+// itself, so the CONNECT tunnel carried only the TLS handshake. Downloads then
+// looked like 0 B/s in the traffic panel (and went out directly). The request has
+// to ride an agent that owns the tunnel socket.
+const tunnelSocket = { fake: true };
+check(
+	"the tunnel agent hands back its own socket",
+	new TunnelAgent(tunnelSocket).createConnection() === tunnelSocket
+);
+const httpSource = fs.readFileSync(new URL("../lib/download/http.js", import.meta.url), "utf8");
+// Strip comments: the fix is documented by quoting the broken pattern.
+const httpCode = httpSource.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+check(
+	"https-over-proxy does not fall back to agent:false + createConnection",
+	!/agent:\s*false,\s*createConnection/.test(httpCode)
+);
+check("https-over-proxy pins the request to the tunnel agent", /new TunnelAgent\(tlsSocket\)/.test(httpSource));
+
 
 // SOCKS5 cannot carry the token in its greeting, so a gated core refuses the protocol.
 const socksReply = await new Promise((resolve, reject) => {

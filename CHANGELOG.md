@@ -9,6 +9,23 @@
 
 ## [未发布]
 
+## [0.7.7] - 2026-11-22
+
+### 修复
+
+- **下载跑得飞快，流量和网速却几乎不动（并且其实没走代理）**。`lib/download/http.js` 的
+  https-经-代理分支写的是
+  `https.request(url, { agent: false, createConnection: () => tlsSocket })`，
+  而 **Node 在 `agent: false` 时会忽略请求级 `createConnection`**：它造一个默认 agent
+  自己连源站，传进去的 socket 根本没被用。表现是三条同时成立 —— ① 隧道只承载了
+  CONNECT + TLS 握手（实测 `up` 固定 +1597、`down` 恒 0）；② `dsh_download` 却真的下完了
+  文件；③ 载荷**直连**出去了（原先那些"走代理成功"的样本如 wikimedia 162 KB、
+  Cloudflare 28.6 MB 其实不挂代理也能成功，所以证明不了走了代理）。修法是新增
+  `TunnelAgent`（`https.Agent` 子类，`createConnection` 返回那条已握手的 socket），
+  请求改用它。用「计数型假代理」复现：修前 `tunnelDown=3932`（只有握手）、修后
+  `tunnelDown=6015489`（6 MB 全部走隧道）。回归测试放在 `test/smoke.mjs`，顺手钉住
+  「不再出现 `agent:false` + `createConnection` 组合」这一条。
+
 ## [0.7.6] - 2026-11-15
 
 ### 修复
